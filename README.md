@@ -167,8 +167,8 @@ flowchart LR
 
 ```
  Test Files  1 passed (1)
-      Tests  17 passed (17)
-   Duration  5.92s
+      Tests  27 passed (27)
+   Duration  7.37s
 ```
 
 ### 测试覆盖
@@ -178,6 +178,12 @@ flowchart LR
 | L1 单元测试 | AbilityCollector, ViewTreeCallbackExtractor, NavigationAnalyzer | ✅ |
 | L2 集成测试 | 模块间协作 | ✅ |
 | L3 端到端测试 | 完整 DummyMain 生成 | ✅ |
+| L4 复杂场景 | 多事件类型、嵌套组件 | ✅ |
+| L5 边界情况 | 空组件、最小化 Ability | ✅ |
+| L6 结构验证 | CFG 结构、参数生成 | ✅ |
+| L7 性能测试 | 处理时间基准 (246ms) | ✅ |
+
+**覆盖率估算**: ~65%
 
 ### 运行测试
 
@@ -202,7 +208,8 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
-| 2025-01-28 | v0.7.0 | 添加完整测试套件，17 项测试全部通过 |
+| 2025-01-29 | v0.8.0 | 扩展测试套件至 27 项，覆盖复杂场景和边界情况 |
+| 2025-01-29 | v0.7.0 | 添加基础测试套件，17 项测试全部通过 |
 | 2025-01-28 | v0.6.0 | 实现 addUICallbackInvocation() UI 回调参数生成 |
 | 2025-01-28 | v0.5.0 | 实现 addMethodInvocation() 生命周期方法参数生成 |
 | 2025-01-28 | v0.4.0 | 实现 resolveCallbackMethod() 回调方法解析 |

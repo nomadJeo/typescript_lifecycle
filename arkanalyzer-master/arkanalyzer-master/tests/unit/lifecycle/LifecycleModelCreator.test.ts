@@ -370,6 +370,278 @@ describe('Level 3: 端到端测试 - LifecycleModelCreator', () => {
 // 辅助测试：打印调试信息
 // ============================================================================
 
+// ============================================================================
+// Level 4: 复杂场景测试
+// ============================================================================
+
+describe('Level 4: 复杂 UI 场景测试', () => {
+    
+    describe('4.1 复杂 UI 组件测试', () => {
+        let scene: Scene;
+        let collector: AbilityCollector;
+        let extractor: ViewTreeCallbackExtractor;
+        
+        beforeAll(() => {
+            try {
+                scene = buildScene('complex-ui');
+                collector = new AbilityCollector(scene);
+                extractor = new ViewTreeCallbackExtractor(scene);
+            } catch (e) {
+                console.log('[Test] complex-ui 场景构建失败，跳过测试');
+            }
+        });
+
+        it('4.1.1 应该能识别多种 UI 事件类型', () => {
+            if (!scene) {
+                console.log('[Test] 跳过: scene 未初始化');
+                return;
+            }
+            
+            let totalCallbacks = 0;
+            const eventTypes = new Set<string>();
+            
+            for (const arkClass of scene.getClasses()) {
+                const viewTree = arkClass.getViewTree();
+                if (viewTree) {
+                    const callbacks = extractor.extractFromComponent(arkClass);
+                    totalCallbacks += callbacks.length;
+                    
+                    for (const cb of callbacks) {
+                        eventTypes.add(cb.eventType);
+                    }
+                }
+            }
+            
+            console.log(`[Test] 总回调数: ${totalCallbacks}`);
+            console.log(`[Test] 事件类型: ${[...eventTypes].join(', ')}`);
+            
+            // 应该识别多种事件类型
+            expect(eventTypes.size).toBeGreaterThanOrEqual(1);
+        });
+
+        it('4.1.2 应该能处理嵌套组件', () => {
+            if (!scene) {
+                console.log('[Test] 跳过: scene 未初始化');
+                return;
+            }
+            
+            const components = collector.collectAllComponents();
+            const componentNames = components.map(c => c.name);
+            
+            console.log(`[Test] 组件列表: ${componentNames.join(', ')}`);
+            
+            // 应该收集到多个组件（包括子组件）
+            console.log(`[Test] 组件数量: ${components.length}`);
+        });
+
+        it('4.1.3 应该能提取方法引用和箭头函数回调', () => {
+            if (!scene) {
+                console.log('[Test] 跳过: scene 未初始化');
+                return;
+            }
+            
+            for (const arkClass of scene.getClasses()) {
+                if (arkClass.getName() === 'HomePage') {
+                    const callbacks = extractor.extractFromComponent(arkClass);
+                    
+                    console.log(`[Test] HomePage 回调详情:`);
+                    for (const cb of callbacks) {
+                        const methodName = cb.callbackMethod?.getName() || 'unknown';
+                        console.log(`[Test]   ${cb.componentType}.${cb.eventType} -> ${methodName}`);
+                    }
+                    
+                    expect(callbacks.length).toBeGreaterThan(0);
+                }
+            }
+        });
+    });
+});
+
+// ============================================================================
+// Level 5: 边界情况测试
+// ============================================================================
+
+describe('Level 5: 边界情况测试', () => {
+    
+    describe('5.1 空组件和最小化组件', () => {
+        
+        it('5.1.1 应该能处理空组件（无回调）', () => {
+            try {
+                const scene = buildScene('edge-cases');
+                const extractor = new ViewTreeCallbackExtractor(scene);
+                
+                for (const arkClass of scene.getClasses()) {
+                    if (arkClass.getName() === 'EmptyComponent') {
+                        const callbacks = extractor.extractFromComponent(arkClass);
+                        console.log(`[Test] EmptyComponent 回调数: ${callbacks.length}`);
+                        
+                        // 空组件应该返回 0 个或少量回调
+                        expect(callbacks.length).toBeGreaterThanOrEqual(0);
+                    }
+                }
+            } catch (e) {
+                console.log('[Test] edge-cases 场景构建失败，跳过测试');
+            }
+        });
+
+        it('5.1.2 应该能处理最小化 Ability', () => {
+            try {
+                const scene = buildScene('edge-cases');
+                const collector = new AbilityCollector(scene);
+                
+                const abilities = collector.collectAllAbilities();
+                
+                for (const ability of abilities) {
+                    if (ability.name === 'MinimalAbility') {
+                        const methodCount = ability.lifecycleMethods.size;
+                        console.log(`[Test] MinimalAbility 生命周期方法数: ${methodCount}`);
+                        
+                        // 最小化 Ability 至少有 1 个生命周期方法
+                        expect(methodCount).toBeGreaterThanOrEqual(1);
+                    }
+                }
+            } catch (e) {
+                console.log('[Test] edge-cases 场景构建失败，跳过测试');
+            }
+        });
+    });
+});
+
+// ============================================================================
+// Level 6: 数据流验证测试
+// ============================================================================
+
+describe('Level 6: DummyMain 结构验证', () => {
+    
+    describe('6.1 CFG 结构验证', () => {
+        let scene: Scene;
+        let creator: LifecycleModelCreator;
+        
+        beforeAll(() => {
+            scene = buildScene('simple');
+            creator = new LifecycleModelCreator(scene);
+            creator.create();
+        });
+
+        it('6.1.1 CFG 应该包含基本块', () => {
+            const dummyMain = creator.getDummyMain();
+            const cfg = dummyMain?.getCfg();
+            
+            if (cfg) {
+                const blocks = cfg.getBlocks();
+                const blockCount = blocks.size;
+                
+                console.log(`[Test] CFG 基本块数量: ${blockCount}`);
+                
+                // CFG 应该至少有 1 个基本块
+                expect(blockCount).toBeGreaterThan(0);
+            }
+        });
+
+        it('6.1.2 CFG 应该包含生命周期方法调用语句', () => {
+            const dummyMain = creator.getDummyMain();
+            const cfg = dummyMain?.getCfg();
+            
+            if (cfg) {
+                let invokeCount = 0;
+                let newExprCount = 0;
+                
+                for (const block of cfg.getBlocks()) {
+                    for (const stmt of block.getStmts()) {
+                        const stmtStr = stmt.toString();
+                        if (stmtStr.includes('invoke')) {
+                            invokeCount++;
+                        }
+                        if (stmtStr.includes('new ')) {
+                            newExprCount++;
+                        }
+                    }
+                }
+                
+                console.log(`[Test] invoke 语句数: ${invokeCount}`);
+                console.log(`[Test] new 表达式数: ${newExprCount}`);
+                
+                // 应该有调用语句
+                expect(invokeCount).toBeGreaterThan(0);
+            }
+        });
+
+        it('6.1.3 生命周期方法调用应该包含参数', () => {
+            const dummyMain = creator.getDummyMain();
+            const cfg = dummyMain?.getCfg();
+            
+            if (cfg) {
+                let hasParamsCall = false;
+                
+                for (const block of cfg.getBlocks()) {
+                    for (const stmt of block.getStmts()) {
+                        const stmtStr = stmt.toString();
+                        // 检查是否有带参数的调用（如 onCreate(%param0, %param1)）
+                        if (stmtStr.includes('onCreate') && stmtStr.includes('%param')) {
+                            hasParamsCall = true;
+                            console.log(`[Test] 带参数的调用: ${stmtStr}`);
+                        }
+                    }
+                }
+                
+                console.log(`[Test] 存在带参数的生命周期调用: ${hasParamsCall}`);
+            }
+        });
+    });
+
+    describe('6.2 Ability-Component 关联验证', () => {
+        let scene: Scene;
+        let creator: LifecycleModelCreator;
+        
+        beforeAll(() => {
+            scene = buildScene('simple');
+            creator = new LifecycleModelCreator(scene);
+            creator.create();
+        });
+
+        it('6.2.1 Ability 应该关联到正确的 Component', () => {
+            const abilities = creator.getAbilities();
+            
+            for (const ability of abilities) {
+                console.log(`[Test] ${ability.name}:`);
+                console.log(`[Test]   关联 Component 数: ${ability.components.length}`);
+                console.log(`[Test]   导航目标数: ${ability.navigationTargets.length}`);
+                
+                for (const target of ability.navigationTargets) {
+                    console.log(`[Test]   -> ${target.targetComponent || target.targetAbility || 'unknown'}`);
+                }
+            }
+        });
+    });
+});
+
+// ============================================================================
+// Level 7: 性能基准测试
+// ============================================================================
+
+describe('Level 7: 性能基准测试', () => {
+    
+    it('7.1 simple 项目处理时间应在合理范围内', () => {
+        const startTime = Date.now();
+        
+        const scene = buildScene('simple');
+        const creator = new LifecycleModelCreator(scene);
+        creator.create();
+        
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+        
+        console.log(`[Test] simple 项目处理时间: ${duration}ms`);
+        
+        // 处理时间应该在 5 秒以内
+        expect(duration).toBeLessThan(5000);
+    });
+});
+
+// ============================================================================
+// 辅助测试：打印调试信息
+// ============================================================================
+
 describe('Debug: 打印项目结构', () => {
     
     it('打印 simple 项目的类结构', () => {

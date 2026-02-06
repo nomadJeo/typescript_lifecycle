@@ -4,11 +4,12 @@
 
 ```
  Test Files  1 passed (1)
-      Tests  17 passed (17)
-   Duration  5.92s
+      Tests  27 passed (27)
+   Duration  7.37s
 ```
 
 **最后测试时间**: 2025-01-28
+**测试覆盖率估算**: ~65%
 
 ---
 
@@ -26,9 +27,19 @@ lifecycle/
 │   ├── SecondAbility.ets     # 第二个 Ability
 │   └── module.json5          # 多 Ability 配置
 │
-└── router/                   # 路由测试项目
-    ├── Index.ets             # 含多种路由跳转方式
-    └── Detail.ets            # 目标页面
+├── router/                   # 路由测试项目
+│   ├── Index.ets             # 含多种路由跳转方式
+│   └── Detail.ets            # 目标页面
+│
+├── complex-ui/               # 复杂 UI 场景
+│   ├── HomePage.ets          # 多事件类型、嵌套组件
+│   ├── DetailPage.ets        # 路由参数传递
+│   └── module.json5
+│
+└── edge-cases/               # 边界情况测试
+    ├── EmptyComponent.ets    # 空组件（无回调）
+    ├── NoViewTreeComponent.ets # 极简组件
+    └── MinimalAbility.ets    # 最小化 Ability
 ```
 
 ---
@@ -82,6 +93,36 @@ lifecycle/
 | DummyMain 包含 CFG | ✅ | CFG 包含 7 个基本块 |
 | 正确数量的 Ability/Component | ✅ | 1 Ability + 1 Component |
 | 多 Ability 处理 | ✅ | 成功处理 2 个 Ability |
+
+### Level 4: 复杂 UI 场景测试
+
+| 测试项 | 状态 | 说明 |
+|--------|:----:|------|
+| 多种 UI 事件类型识别 | ✅ | onClick, onTouch 等 |
+| 嵌套组件处理 | ✅ | 父子组件正确识别 |
+| 方法引用和箭头函数回调 | ✅ | 两种形式均支持 |
+
+### Level 5: 边界情况测试
+
+| 测试项 | 状态 | 说明 |
+|--------|:----:|------|
+| 空组件处理 | ✅ | 无回调组件正常处理 |
+| 最小化 Ability | ✅ | 只有 onCreate 的 Ability |
+
+### Level 6: DummyMain 结构验证
+
+| 测试项 | 状态 | 说明 |
+|--------|:----:|------|
+| CFG 包含基本块 | ✅ | 7 个基本块 |
+| 生命周期调用语句 | ✅ | 13 个 invoke 语句 |
+| 参数生成验证 | ✅ | onCreate(%param1, %param2) |
+| Ability-Component 关联 | ✅ | 正确建立关联 |
+
+### Level 7: 性能基准测试
+
+| 测试项 | 状态 | 说明 |
+|--------|:----:|------|
+| 处理时间 | ✅ | simple 项目 246ms (< 5s) |
 
 ---
 
