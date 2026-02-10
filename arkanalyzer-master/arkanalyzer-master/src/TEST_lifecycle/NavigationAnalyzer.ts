@@ -168,21 +168,31 @@ export class NavigationAnalyzer {
      * 分析单个方法中的路由/跳转
      * 
      * @param method 要分析的方法
-     * @param result 分析结果（会被修改）
+     * @param result 分析结果（会被修改），如果不提供则创建新的
+     * @returns 分析结果中的导航目标数组
      */
-    public analyzeMethod(method: ArkMethod, result: NavigationAnalysisResult): void {
+    public analyzeMethod(method: ArkMethod, result?: NavigationAnalysisResult): NavigationTarget[] {
+        // 如果没有提供 result，创建一个默认的
+        const analysisResult: NavigationAnalysisResult = result || {
+            initialPage: null,
+            navigationTargets: [],
+            warnings: [],
+        };
+        
         const cfg = method.getCfg();
         if (!cfg) {
-            return;
+            return analysisResult.navigationTargets;
         }
 
         // 遍历所有基本块
         for (const block of cfg.getBlocks()) {
             // 遍历块中的所有语句
             for (const stmt of block.getStmts()) {
-                this.analyzeStmt(stmt, method, result);
+                this.analyzeStmt(stmt, method, analysisResult);
             }
         }
+        
+        return analysisResult.navigationTargets;
     }
 
     // ========================================================================
@@ -515,6 +525,18 @@ export class NavigationAnalyzer {
                 // 递归追踪
                 return this.extractUrlFromLocalObject(rightOp);
             }
+            
+            // 情况2b: 右操作数是 new 表达式（对象字面量被转换为匿名类）
+            // 例如: %0 = new %AC1$DynamicRouter.goToPage1
+            if (rightOp instanceof ArkNewExpr) {
+                const classType = rightOp.getClassType();
+                if (classType) {
+                    const url = this.extractUrlFromAnonymousClass(classType);
+                    if (url) {
+                        return url;
+                    }
+                }
+            }
         }
 
         // 查找对该对象 url 属性的赋值
@@ -604,6 +626,71 @@ export class NavigationAnalyzer {
             }
         }
         
+        return null;
+    }
+
+    /**
+     * 从匿名类（对象字面量生成的）中提取 url 字段值
+     * 
+     * 当代码为 `router.pushUrl({ url: 'pages/Page1' })` 时，
+     * ArkAnalyzer 会将对象字面量转换为匿名类：
+     * 
+     * ```
+     * %0 = new %AC1$DynamicRouter.goToPage1
+     * instanceinvoke router.pushUrl(%0)
+     * ```
+     * 
+     * url 值存储在匿名类的字段初始值中：
+     * 
+     * ```
+     * 类: %AC1$DynamicRouter.goToPage1
+     * 字段: url: string
+     * 初始值: this.url = 'pages/Page1'
+     * ```
+     */
+    private extractUrlFromAnonymousClass(classType: ClassType): string | null {
+        const className = classType.getClassSignature().getClassName();
+        console.log(`[NavigationAnalyzer] Extracting url from anonymous class: ${className}`);
+        
+        // 获取匿名类
+        const arkClass = this.scene.getClass(classType.getClassSignature());
+        if (!arkClass) {
+            console.log(`[NavigationAnalyzer] Anonymous class not found: ${className}`);
+            return null;
+        }
+        
+        // 查找 url 字段
+        for (const field of arkClass.getFields()) {
+            if (field.getName() === 'url') {
+                // 获取字段的初始值
+                const initializer = field.getInitializer();
+                if (initializer) {
+                    // 初始值是一个 Stmt，通常是 ArkAssignStmt
+                    // 格式: this.<...>.url = 'pages/Page1'
+                    if (initializer instanceof ArkAssignStmt) {
+                        const rightOp = initializer.getRightOp();
+                        if (rightOp instanceof Constant && rightOp.getType() instanceof StringType) {
+                            const urlValue = rightOp.getValue();
+                            console.log(`[NavigationAnalyzer] Found url in anonymous class field: ${urlValue}`);
+                            return urlValue;
+                        }
+                    }
+                    
+                    // 尝试从初始值字符串中提取
+                    const initStr = initializer.toString();
+                    console.log(`[NavigationAnalyzer] Field initializer: ${initStr}`);
+                    
+                    // 匹配形如 "this.url = 'pages/xxx'" 的模式
+                    const match = initStr.match(/=\s*'([^']+)'/);
+                    if (match) {
+                        console.log(`[NavigationAnalyzer] Extracted url from initializer string: ${match[1]}`);
+                        return match[1];
+                    }
+                }
+            }
+        }
+        
+        console.log(`[NavigationAnalyzer] No url field found in anonymous class`);
         return null;
     }
 

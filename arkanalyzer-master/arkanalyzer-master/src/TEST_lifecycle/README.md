@@ -2508,9 +2508,10 @@ solver.solve();
 | 0.4.0 | 2025-01-28 | 实现 resolveCallbackMethod() 回调方法解析 |
 | 0.5.0 | 2025-01-28 | 实现 addMethodInvocation() 生命周期方法参数生成 |
 | 0.6.0 | 2025-01-28 | 实现 addUICallbackInvocation() UI 回调参数生成 |
+| 0.7.0 | 2025-01-29 | 增强 extractUrlFromAnonymousClass() 支持对象字面量 URL 解析 |
 
 ---
 
 > **作者**: AI Assistant &  YiZhou
 > **创建日期**: 2025-01-17  
-> **最后更新**: 2025-01-27
+> **最后更新**: 2025-01-29

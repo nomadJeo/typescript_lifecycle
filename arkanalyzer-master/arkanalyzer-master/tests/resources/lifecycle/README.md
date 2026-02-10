@@ -77,6 +77,8 @@ lifecycle/
 |--------|:----:|------|
 | 分析 router.pushUrl | ✅ | 识别 goToDetail1, goToDetail2, goToSettings |
 | 路由 URL 提取 | ✅ | 提取 pages/Index 等 |
+| 对象字面量 URL 解析 | ✅ | 从匿名类字段提取 (v0.7.0 新增) |
+| 变量形式 URL 解析 | ✅ | 追踪 Local 变量定义 (v0.7.0 增强) |
 
 ### Level 2: 集成测试
 
@@ -201,3 +203,40 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
   - `router.replaceUrl()` - 替换式跳转
   - `router.back()` - 返回
 - **Detail.ets**: 路由目标页面
+- **DynamicRouter.ets**: 动态路由参数场景测试 (v0.7.0 新增)
+  - 对象字面量 URL
+  - 分步赋值 URL
+  - 字符串拼接 URL
+  - 条件选择 URL
+  - 函数返回值 URL
+
+---
+
+## 🔬 v0.7.0 新增：动态路由参数解析
+
+### 解析能力
+
+| 场景 | 示例代码 | 解析结果 |
+|------|---------|:--------:|
+| 直接字面量 | `router.pushUrl({ url: 'pages/Page1' })` | ✅ |
+| 变量形式 | `let opt = { url: 'xxx' }; router.pushUrl(opt)` | ✅ |
+| 字符串拼接 | `router.pushUrl({ url: 'pages/' + name })` | ⚠️ 前缀 |
+| 成员变量 | `router.pushUrl({ url: this.memberVar })` | ❌ |
+| 条件选择 | `router.pushUrl({ url: isA ? 'x' : 'y' })` | ❌ |
+| 函数返回值 | `router.pushUrl({ url: getUrl() })` | ❌ |
+
+### 技术原理
+
+对象字面量 `{ url: 'pages/xxx' }` 被 ArkAnalyzer 转换为匿名类：
+```
+%0 = new %AC1$DynamicRouter.goToPage1
+```
+
+URL 值存储在匿名类的字段初始值中：
+```
+类: %AC1$DynamicRouter.goToPage1
+字段: url: string
+初始值: this.url = 'pages/Page1'
+```
+
+`extractUrlFromAnonymousClass()` 方法从这些字段中提取 URL 值。
