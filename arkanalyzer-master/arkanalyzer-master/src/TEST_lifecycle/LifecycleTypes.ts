@@ -209,6 +209,8 @@ export enum UIEventType {
     ON_CLICK = 'onClick',
     /** 触摸事件 */
     ON_TOUCH = 'onTouch',
+    /** 值变化事件 (TextInput, Slider, Toggle 等) */
+    ON_CHANGE = 'onChange',
     /** 出现事件 */
     ON_APPEAR = 'onAppear',
     /** 消失事件 */
@@ -223,6 +225,12 @@ export enum UIEventType {
     ON_BLUR = 'onBlur',
     /** 区域变化 */
     ON_AREA_CHANGE = 'onAreaChange',
+    /** 选择事件 (Select, Menu 等) */
+    ON_SELECT = 'onSelect',
+    /** 提交事件 (Search, TextInput 等) */
+    ON_SUBMIT = 'onSubmit',
+    /** 滚动事件 (List, Scroll 等) */
+    ON_SCROLL = 'onScroll',
 }
 
 // ============================================================================

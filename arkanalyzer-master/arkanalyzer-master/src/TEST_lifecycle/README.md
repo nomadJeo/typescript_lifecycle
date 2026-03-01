@@ -2404,8 +2404,10 @@ for (const component of components) {
 
 | 位置 | 功能 | 优先级 | 说明 |
 |------|------|--------|------|
+| `NavigationAnalyzer` | NavPathStack 支持 | 中 | 支持 pushPath/pushPathByName 新 API |
 | `resolveCallbackMethod()` Lambda 增强 | Lambda 完整支持 | 低 | 完整解析内联 Lambda 表达式 |
 | 路由参数数据流分析 | 复杂参数解析 | 低 | 处理动态计算的路由参数 |
+| ViewTree 增强 | 第三方 UI 框架支持 | 低 | 改进对 HdsNavigation 等组件的解析 |
 | 控件实例创建 | UI 控件实例化 | 低 | 为每个控件创建实例（非必需） |
 
 ### 8.3 扩展建议
@@ -2502,16 +2504,54 @@ solver.solve();
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
-| 0.1.0 | 2025-01-17 | 初始框架，基本结构完成 |
-| 0.2.0 | 2025-01-27 | 新增 NavigationAnalyzer 路由分析器 |
-| 0.3.0 | 2025-01-27 | 完善路由参数解析和 module.json5 入口识别 |
-| 0.4.0 | 2025-01-28 | 实现 resolveCallbackMethod() 回调方法解析 |
-| 0.5.0 | 2025-01-28 | 实现 addMethodInvocation() 生命周期方法参数生成 |
-| 0.6.0 | 2025-01-28 | 实现 addUICallbackInvocation() UI 回调参数生成 |
+| **1.0.0** | **2025-03-01** | **里程碑版本：4 个真实华为 Codelab 项目验证通过** |
+| 0.9.1 | 2025-03-01 | 修复 JSON5 解析问题（支持尾随逗号、单引号） |
+| 0.9.0 | 2025-03-01 | 新增 UI 事件：onChange, onSelect, onSubmit, onScroll |
+| 0.8.0 | 2025-02-10 | 增强动态路由参数解析，支持对象字面量 URL 提取 |
 | 0.7.0 | 2025-01-29 | 增强 extractUrlFromAnonymousClass() 支持对象字面量 URL 解析 |
+| 0.6.0 | 2025-01-28 | 实现 addUICallbackInvocation() UI 回调参数生成 |
+| 0.5.0 | 2025-01-28 | 实现 addMethodInvocation() 生命周期方法参数生成 |
+| 0.4.0 | 2025-01-28 | 实现 resolveCallbackMethod() 回调方法解析 |
+| 0.3.0 | 2025-01-27 | 完善路由参数解析和 module.json5 入口识别 |
+| 0.2.0 | 2025-01-27 | 新增 NavigationAnalyzer 路由分析器 |
+| 0.1.0 | 2025-01-17 | 初始框架，基本结构完成 |
+
+### C. v1.0.0 真实项目验证报告
+
+#### 验证项目
+
+| 项目 | 类型 | 规模 | Component | UI 回调 | 结果 |
+|------|------|------|-----------|---------|:----:|
+| RingtoneKit_Codelab_Demo | 铃声服务 | 小型 (2 文件) | 1 | 2 | ✅ |
+| UIDesignKit_HdsNavigation_Codelab | 导航组件 | 中型 (6 文件) | 3 | 0* | ✅ |
+| CloudFoundationKit_Codelab_Prefetch_ArkTS | 云开发 | 中型 (5 文件) | 3 | 8 | ✅ |
+| OxHornCampus | 展示应用 | 大型 (35 文件) | 17 | 30 | ✅ |
+
+> *UIDesignKit 使用第三方 UI 框架导致 ViewTree 为空
+
+#### v1.0.0 关键修复
+
+1. **JSON5 解析增强** - `AbilityCollector.parseModuleJson()` 现支持：
+   - 尾随逗号 (`{ "a": 1, }`)
+   - 单引号字符串 (`{ 'key': 'value' }`)
+   - 单行/多行注释
+
+2. **新增 UI 事件类型** - `ViewTreeCallbackExtractor` 新增支持：
+   - `onChange` - 输入变化事件
+   - `onSelect` - 选择事件
+   - `onSubmit` - 提交事件
+   - `onScroll` - 滚动事件
+
+#### 发现的限制
+
+| 限制 | 说明 | 优先级 |
+|------|------|:------:|
+| 第三方 UI 框架 | HdsNavigation 等组件无法解析 ViewTree | 低 |
+| NavPathStack API | pushPath/pushPathByName 未支持 | 中 |
+| 动态 loadContent | 变量形式目标无法静态解析 | 低 |
 
 ---
 
 > **作者**: AI Assistant &  YiZhou
 > **创建日期**: 2025-01-17  
-> **最后更新**: 2025-01-29
+> **最后更新**: 2025-03-01

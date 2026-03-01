@@ -50,6 +50,7 @@ import {
 const UI_EVENT_METHODS: string[] = [
     'onClick',
     'onTouch',
+    'onChange',
     'onAppear',
     'onDisAppear',
     'onDragStart',
@@ -64,6 +65,9 @@ const UI_EVENT_METHODS: string[] = [
     'onMouse',
     'onAreaChange',
     'onVisibleAreaChange',
+    'onSelect',
+    'onSubmit',
+    'onScroll',
 ];
 
 /**
@@ -72,6 +76,7 @@ const UI_EVENT_METHODS: string[] = [
 const METHOD_TO_EVENT_TYPE: Map<string, UIEventType> = new Map([
     ['onClick', UIEventType.ON_CLICK],
     ['onTouch', UIEventType.ON_TOUCH],
+    ['onChange', UIEventType.ON_CHANGE],
     ['onAppear', UIEventType.ON_APPEAR],
     ['onDisAppear', UIEventType.ON_DISAPPEAR],
     ['onDragStart', UIEventType.ON_DRAG_START],
@@ -79,6 +84,9 @@ const METHOD_TO_EVENT_TYPE: Map<string, UIEventType> = new Map([
     ['onFocus', UIEventType.ON_FOCUS],
     ['onBlur', UIEventType.ON_BLUR],
     ['onAreaChange', UIEventType.ON_AREA_CHANGE],
+    ['onSelect', UIEventType.ON_SELECT],
+    ['onSubmit', UIEventType.ON_SUBMIT],
+    ['onScroll', UIEventType.ON_SCROLL],
 ]);
 
 // ============================================================================

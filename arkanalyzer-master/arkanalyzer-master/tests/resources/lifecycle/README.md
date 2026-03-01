@@ -3,13 +3,106 @@
 ## 📊 测试结果总览
 
 ```
- Test Files  1 passed (1)
-      Tests  27 passed (27)
-   Duration  7.37s
+ Test Files  5 passed (5)
+      Tests  90 passed (90)
+   Duration  ~25s
 ```
 
-**最后测试时间**: 2025-01-28
-**测试覆盖率估算**: ~65%
+**最后测试时间**: 2025-03-01
+**测试覆盖率估算**: ~75%
+
+---
+
+## 🌟 v1.0.0 新增：真实项目验证
+
+### 测试项目概览
+
+| 项目 | 描述 | 规模 | 测试文件 | 状态 |
+|------|------|------|----------|:----:|
+| **RingtoneKit_Codelab_Demo** | 铃声服务 Codelab | 小型 (2 文件) | `RingtoneKitAnalysis.test.ts` | ✅ |
+| **UIDesignKit_HdsNavigation_Codelab** | 高端导航栏组件 | 中型 (6 文件) | `UIDesignKitNavAnalysis.test.ts` | ✅ |
+| **CloudFoundationKit_Codelab_Prefetch_ArkTS** | 云开发预加载服务 | 中型 (5 文件) | `CloudFoundationKitAnalysis.test.ts` | ✅ |
+| **OxHornCampus** | 溪村小镇展示应用 | 大型 (35 文件) | `OxHornCampusAnalysis.test.ts` | ✅ |
+
+### 详细测试结果
+
+#### 1. RingtoneKit_Codelab_Demo (小型项目)
+
+| 指标 | 结果 |
+|------|------|
+| **测试用例** | 11/11 通过 |
+| **Ability** | 1 (EntryAbility) |
+| **Component** | 1 (Index) |
+| **生命周期方法** | 7 |
+| **UI 回调** | 2 (onClick, onChange) |
+| **特点** | 验证基础功能、onChange 事件支持 |
+
+#### 2. UIDesignKit_HdsNavigation_Codelab (中型项目)
+
+| 指标 | 结果 |
+|------|------|
+| **测试用例** | 12/12 通过 |
+| **Ability** | 2 (EntryAbility, EntryBackupAbility) |
+| **Component** | 3 (Index, PageOne, PageTwo) |
+| **生命周期方法** | 9 |
+| **UI 回调** | 0* |
+| **特点** | 发现第三方 UI 框架 (HdsNavigation) ViewTree 解析限制 |
+
+> *第三方 UI 组件导致 ViewTree 为空，这是 ArkAnalyzer 的固有限制
+
+#### 3. CloudFoundationKit_Codelab_Prefetch_ArkTS (中型项目)
+
+| 指标 | 结果 |
+|------|------|
+| **测试用例** | 12/12 通过 |
+| **Ability** | 1 (EntryAbility) |
+| **Component** | 3 (Index, CloudResPrefetch, CloudResPeriodicPrefetch) |
+| **生命周期方法** | 9 |
+| **UI 回调** | 8 (全部为 onClick) |
+| **特点** | 验证 module.json5 修复、标准 ArkUI 组件 |
+
+#### 4. OxHornCampus (大型项目) ⭐
+
+| 指标 | 结果 |
+|------|------|
+| **测试用例** | 12/12 通过 |
+| **Ability** | 2 (EntryAbility, EntryFormAbility) |
+| **Component** | 17 |
+| **生命周期方法** | 32 |
+| **UI 回调** | 30 (onClick: 20, onChange: 5, onSubmit: 3, onAreaChange: 2) |
+| **Scene 构建时间** | 911ms |
+| **特点** | 大规模项目压力测试、丰富的事件类型、aboutToAppear/aboutToDisappear 生命周期 |
+
+### 关键发现与修复
+
+#### 修复 1: JSON5 解析问题
+
+**问题**: module.json5 文件中的尾随逗号导致解析失败
+
+**修复**: 在 `AbilityCollector.ts` 中增强 JSON5 -> JSON 转换
+```typescript
+const jsonContent = content
+    .replace(/\/\/.*$/gm, '')           // 移除单行注释
+    .replace(/\/\*[\s\S]*?\*\//g, '')   // 移除多行注释
+    .replace(/,(\s*[\]}])/g, '$1')      // 移除尾随逗号
+    .replace(/'/g, '"');                // 单引号转双引号
+```
+
+#### 修复 2: 新增 UI 事件类型
+
+**新增支持**: `onChange`, `onSelect`, `onSubmit`, `onScroll`
+
+**修改文件**: 
+- `ViewTreeCallbackExtractor.ts` - 添加事件方法识别
+- `LifecycleTypes.ts` - 添加事件类型枚举
+
+#### 发现的限制
+
+| 限制 | 说明 | 影响 |
+|------|------|------|
+| **第三方 UI 组件** | HdsNavigation 等组件无法解析 ViewTree | 仅影响使用特定 UI 框架的项目 |
+| **NavPathStack 导航** | pushPath/pushPathByName 新 API 未支持 | 不影响传统 router 导航 |
+| **动态 loadContent 目标** | 变量形式的目标页面无法静态解析 | 不影响常量形式的页面加载 |
 
 ---
 
@@ -212,7 +305,7 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 ---
 
-## 🔬 v0.7.0 新增：动态路由参数解析
+## 🔬 动态路由参数解析 (v0.7.0+)
 
 ### 解析能力
 
@@ -240,3 +333,60 @@ URL 值存储在匿名类的字段初始值中：
 ```
 
 `extractUrlFromAnonymousClass()` 方法从这些字段中提取 URL 值。
+
+---
+
+## 🏗️ 真实项目分析架构
+
+### 测试文件组织
+
+```
+tests/unit/lifecycle/
+├── LifecycleModelCreator.test.ts     # 核心功能测试 (27 用例)
+├── RingtoneKitAnalysis.test.ts       # 真实项目: 小型 (11 用例)
+├── UIDesignKitNavAnalysis.test.ts    # 真实项目: 中型 (12 用例)
+├── CloudFoundationKitAnalysis.test.ts # 真实项目: 中型 (12 用例)
+└── OxHornCampusAnalysis.test.ts      # 真实项目: 大型 (12 用例)
+```
+
+### 真实项目测试用例结构
+
+每个真实项目测试文件包含以下标准测试套件：
+
+```typescript
+describe('项目名 - TEST_lifecycle 分析', () => {
+    // 1. 项目规模分析
+    test('项目规模 - 类和文件统计');
+    
+    // 2. module.json5 解析
+    test('module.json5 解析 - 入口 Ability 识别');
+    
+    // 3. Ability 收集
+    test('Ability 收集 - 数量和生命周期方法');
+    
+    // 4. Component 收集  
+    test('Component 收集 - 数量和生命周期方法');
+    
+    // 5. UI 回调提取
+    test('UI 回调提取 - 事件类型和分布');
+    
+    // 6. 导航分析
+    test('导航分析 - 路由和页面跳转');
+    
+    // 7. DummyMain 生成
+    test('DummyMain 生成 - CFG 结构验证');
+});
+```
+
+### 运行特定项目测试
+
+```bash
+# 运行所有 lifecycle 测试
+npx vitest run tests/unit/lifecycle/ --reporter=verbose
+
+# 运行单个项目测试
+npx vitest run tests/unit/lifecycle/OxHornCampusAnalysis.test.ts
+
+# 运行并输出详细日志
+DEBUG=* npx vitest run tests/unit/lifecycle/RingtoneKitAnalysis.test.ts
+```

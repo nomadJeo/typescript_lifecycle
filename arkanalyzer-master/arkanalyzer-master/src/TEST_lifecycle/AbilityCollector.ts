@@ -238,10 +238,13 @@ export class AbilityCollector {
         try {
             const content = fs.readFileSync(filePath, 'utf-8');
             
-            // 移除 JSON5 注释（简单处理）
+            // JSON5 -> JSON 转换（不依赖外部库）
+            // 处理 JSON5 的扩展语法：注释、尾随逗号、单引号字符串
             const jsonContent = content
-                .replace(/\/\/.*$/gm, '')  // 移除单行注释
-                .replace(/\/\*[\s\S]*?\*\//g, '');  // 移除多行注释
+                .replace(/\/\/.*$/gm, '')           // 移除单行注释
+                .replace(/\/\*[\s\S]*?\*\//g, '')   // 移除多行注释
+                .replace(/,(\s*[\]}])/g, '$1')      // 移除尾随逗号
+                .replace(/'/g, '"');                // 单引号转双引号
             
             const parsed = JSON.parse(jsonContent);
             const module = parsed.module;
