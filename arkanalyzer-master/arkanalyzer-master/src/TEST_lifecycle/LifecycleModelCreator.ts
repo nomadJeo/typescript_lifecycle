@@ -986,6 +986,7 @@ export class LifecycleModelCreator {
      */
     private linkStmtsToCfg(cfg: Cfg): void {
         for (const block of cfg.getBlocks()) {
+            cfg.updateStmt2BlockMap(block);
             for (const stmt of block.getStmts()) {
                 stmt.setCfg(cfg);
             }

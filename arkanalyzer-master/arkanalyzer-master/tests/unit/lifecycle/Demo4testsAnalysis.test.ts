@@ -184,6 +184,9 @@ describe('Demo4tests: RingtoneKit_Codelab_Demo（初级）', () => {
         expect(result.abilities).toBeGreaterThanOrEqual(1);
         expect(result.components).toBeGreaterThanOrEqual(1);
         expect(result.dummyMainStmts).toBeGreaterThan(0);
+        expect(result.ifdsMethods).toBeGreaterThan(0);
+        expect(result.ifdsFacts).toBeGreaterThan(0);
+        expect(result.warnings.filter(w => w.includes('IFDS'))).toHaveLength(0);
 
         console.log(`  [RingtoneKit] 警告: ${result.warnings.join('; ') || '无'}`);
         console.log(`  [RingtoneKit] 总时间: ${Object.values(result.duration).reduce((a, b) => a + b, 0)}ms`);
@@ -211,6 +214,9 @@ describe('Demo4tests: UIDesignKit_HdsNavigation（初级）', () => {
         expect(result.abilities).toBeGreaterThanOrEqual(1);
         expect(result.components).toBeGreaterThanOrEqual(1);
         expect(result.dummyMainStmts).toBeGreaterThan(0);
+        expect(result.ifdsMethods).toBeGreaterThan(0);
+        expect(result.ifdsFacts).toBeGreaterThan(0);
+        expect(result.warnings.filter(w => w.includes('IFDS'))).toHaveLength(0);
 
         console.log(`  [UIDesignKit] 警告: ${result.warnings.join('; ') || '无'}`);
         console.log(`  [UIDesignKit] 总时间: ${Object.values(result.duration).reduce((a, b) => a + b, 0)}ms`);
@@ -236,6 +242,9 @@ describe('Demo4tests: CloudFoundationKit_Prefetch（中级）', () => {
         expect(result.abilities).toBeGreaterThanOrEqual(1);
         expect(result.components).toBeGreaterThanOrEqual(1);
         expect(result.dummyMainStmts).toBeGreaterThan(0);
+        expect(result.ifdsMethods).toBeGreaterThan(0);
+        expect(result.ifdsFacts).toBeGreaterThan(0);
+        expect(result.warnings.filter(w => w.includes('IFDS'))).toHaveLength(0);
 
         console.log(`  [CloudFoundation] 警告: ${result.warnings.join('; ') || '无'}`);
         console.log(`  [CloudFoundation] 总时间: ${Object.values(result.duration).reduce((a, b) => a + b, 0)}ms`);
@@ -256,6 +265,9 @@ describe('Demo4tests: OxHornCampus（高级）', () => {
         expect(result.sceneClasses).toBeGreaterThan(0);
         expect(result.abilities).toBeGreaterThanOrEqual(1);
         expect(result.dummyMainStmts).toBeGreaterThan(0);
+        expect(result.ifdsMethods).toBeGreaterThan(0);
+        expect(result.ifdsFacts).toBeGreaterThan(0);
+        expect(result.warnings.filter(w => w.includes('IFDS'))).toHaveLength(0);
 
         console.log(`  [OxHornCampus] 警告: ${result.warnings.join('; ') || '无'}`);
         console.log(`  [OxHornCampus] 总时间: ${Object.values(result.duration).reduce((a, b) => a + b, 0)}ms`);

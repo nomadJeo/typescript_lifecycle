@@ -409,7 +409,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
             if (sourceDef && sourceDef.returnTainted) {
                 const leftOp = stmt.getLeftOp();
                 if (leftOp instanceof Local) {
-                    const ap = new AccessPath(leftOp as ILocal, [], sourceDef.taintSubFields ?? false);
+                    const ap = new AccessPath(leftOp as ILocal, null, [], sourceDef.taintSubFields ?? false);
                     const taint = TaintFact.createFromSource(ap, sourceDef, stmt as IStmt);
                     result.add(taint);
                     
@@ -453,6 +453,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                 const fieldRef = leftOp as ArkInstanceFieldRef;
                 const newAp = new AccessPath(
                     fieldRef.getBase() as ILocal,
+                    null,
                     [fieldRef.getFieldSignature() as IFieldSignature],
                     dataFact.accessPath.taintSubFields
                 );
@@ -481,7 +482,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                 } else {
                     // 非字段敏感：直接传播
                     if (leftOp instanceof Local) {
-                        const newAp = new AccessPath(leftOp as ILocal, [], true);
+                        const newAp = new AccessPath(leftOp as ILocal, null, [], true);
                         result.add(dataFact.deriveWithNewStmt(newAp, stmt as IStmt));
                     }
                 }
@@ -498,6 +499,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                 // 将污点传播到字段
                 const newAp = new AccessPath(
                     base as ILocal,
+                    null,
                     [fieldRef.getFieldSignature() as IFieldSignature],
                     dataFact.accessPath.taintSubFields
                 );

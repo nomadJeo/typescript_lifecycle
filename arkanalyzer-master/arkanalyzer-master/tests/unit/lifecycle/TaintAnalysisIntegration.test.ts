@@ -502,24 +502,20 @@ describe('TaintAnalysisSolver 集成测试（完整 IFDS）', () => {
         const runner = new TaintAnalysisRunner(scene);
         const result = runner.runFromDummyMain();
         
-        // DummyMain 构建可能成功也可能因项目太简单而跳过
-        if (result.success) {
-            expect(result.entryMethod).toContain('extendedDummyMain');
-            expect(result.resourceLeaks).toBeInstanceOf(Array);
-            expect(result.taintLeaks).toBeInstanceOf(Array);
-            expect(result.statistics.analyzedMethods).toBeGreaterThanOrEqual(0);
-            
-            console.log(`[Test] runFromDummyMain 结果:`);
-            console.log(`  - 入口: ${result.entryMethod}`);
-            console.log(`  - 分析方法数: ${result.statistics.analyzedMethods}`);
-            console.log(`  - 总事实数: ${result.statistics.totalFacts}`);
-            console.log(`  - 资源泄漏: ${result.resourceLeaks.length}`);
-            console.log(`  - 污点泄漏: ${result.taintLeaks.length}`);
-            console.log(`  - 耗时: ${result.statistics.duration}ms`);
-        } else {
-            console.log(`[Test] runFromDummyMain 未成功: ${result.error}`);
-            expect(result.error).toBeDefined();
-        }
+        expect(result.success).toBe(true);
+        expect(result.entryMethod).toContain('extendedDummyMain');
+        expect(result.resourceLeaks).toBeInstanceOf(Array);
+        expect(result.taintLeaks).toBeInstanceOf(Array);
+        expect(result.statistics.analyzedMethods).toBeGreaterThan(0);
+        expect(result.statistics.totalFacts).toBeGreaterThan(0);
+        
+        console.log(`[Test] runFromDummyMain 结果:`);
+        console.log(`  - 入口: ${result.entryMethod}`);
+        console.log(`  - 分析方法数: ${result.statistics.analyzedMethods}`);
+        console.log(`  - 总事实数: ${result.statistics.totalFacts}`);
+        console.log(`  - 资源泄漏: ${result.resourceLeaks.length}`);
+        console.log(`  - 污点泄漏: ${result.taintLeaks.length}`);
+        console.log(`  - 耗时: ${result.statistics.duration}ms`);
     });
 });
 

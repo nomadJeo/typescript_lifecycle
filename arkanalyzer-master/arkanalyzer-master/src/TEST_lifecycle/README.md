@@ -2430,7 +2430,7 @@ for (const component of components) {
 | 位置 | 功能 | 优先级 | 说明 |
 |------|------|--------|------|
 | `taint/TaintAnalysisProblem.ts` | 有界化约束 | **高** | 逻辑组件/UI 事件/交互三种约束（项目核心创新点） |
-| `LifecycleModelCreator` | CFG stmtToBlock 映射 | **高** | 修复 DummyMain CFG 与 DataflowSolver 的兼容性 |
+| `LifecycleModelCreator` | CFG stmtToBlock 映射 | ~~高~~ | ~~修复 DummyMain CFG 与 DataflowSolver 的兼容性~~ **已修复 (v2.0.1)** |
 | `NavigationAnalyzer` | NavPathStack 支持 | 中 | 支持 pushPath/pushPathByName 新 API |
 | `resolveCallbackMethod()` Lambda 增强 | Lambda 完整支持 | 低 | 完整解析内联 Lambda 表达式 |
 | ViewTree 增强 | 第三方 UI 框架支持 | 低 | 改进对 HdsNavigation 等组件的解析 |
@@ -2505,7 +2505,7 @@ if (result.success) {
     console.log(`分析方法: ${result.statistics.analyzedMethods}`);
 }
 ```
-> **已知问题**: DummyMain 的 CFG 内部 stmtToBlock 映射未建立，导致 DataflowSolver.init() 崩溃。待修复。
+> **v2.0.1 已修复**: DummyMain CFG 的 stmtToBlock 映射问题已通过 `linkStmtsToCfg` 中追加 `cfg.updateStmt2BlockMap(block)` 解决，IFDS 求解器可正常运行。
 
 ### Q4: ViewTree 是什么时候构建的？
 
@@ -2528,6 +2528,7 @@ if (result.success) {
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| **2.0.1** | **2026-03-01** | **修复 DummyMain CFG stmtToBlock 映射 + AccessPath 构造参数错位，四个真实项目 IFDS 完整通过** |
 | **2.0.0** | **2026-03-01** | **污点分析集成：IFDS 求解器 + 86 条 Source/Sink 规则 + 4 个真实项目验证** |
 | **1.0.0** | **2025-03-01** | **里程碑版本：4 个真实华为 Codelab 项目验证通过** |
 | 0.9.1 | 2025-03-01 | 修复 JSON5 解析问题（支持尾随逗号、单引号） |
@@ -2583,20 +2584,20 @@ if (result.success) {
 
 #### 真实项目验证（4 个 HarmonyOS Codelab 项目）
 
-| 项目 | 难度 | 类 | 方法 | Ability | Component | Source | Sink | DummyMain |
-|------|:----:|---:|-----:|--------:|----------:|-------:|-----:|:---------:|
-| RingtoneKit_Codelab_Demo | 初级 | 5 | 17 | 1 | 1 | 0 | 0 | ✅ |
-| UIDesignKit_HdsNavigation_Codelab | 初级 | 14 | 52 | 1 | 3 | 0 | 0 | ✅ |
-| CloudFoundationKit_Codelab_Prefetch_ArkTS | 中级 | 16 | 49 | 1 | 3 | 0 | 0 | ✅ |
-| OxHornCampus | 高级 | 82 | 244 | 1 | 17 | 9 | 1 | ✅ |
+| 项目 | 难度 | 类 | 方法 | Ability | Component | Source | Sink | IFDS 方法 | IFDS 事实 | 资源泄漏 |
+|------|:----:|---:|-----:|--------:|----------:|-------:|-----:|----------:|----------:|--------:|
+| RingtoneKit_Codelab_Demo | 初级 | 10 | 32 | 1 | 1 | 0 | 0 | 19 | 169 | 0 |
+| UIDesignKit_HdsNavigation_Codelab | 初级 | 66 | 169 | 2 | 3 | 0 | 0 | 54 | 562 | 0 |
+| CloudFoundationKit_Codelab_Prefetch_ArkTS | 中级 | 16 | 49 | 1 | 3 | 0 | 0 | 22 | 184 | 0 |
+| OxHornCampus | 高级 | 392 | 968 | 2 | 17 | 9 | 1 | 161 | 2644 | **1** |
 
-> OxHornCampus 检测到 9 个 Source（资源申请）和 1 个 Sink（资源释放），说明存在潜在资源泄漏。
+> OxHornCampus 检测到 9 个 Source、1 个 Sink，IFDS 分析确认 **1 个资源泄漏**。
 
 #### 已知问题
 
 | 问题 | 严重程度 | 说明 |
 |------|:--------:|------|
-| DummyMain CFG 与 DataflowSolver 不兼容 | **高** | LifecycleModelCreator 构建的 CFG 未填充 stmtToBlock 映射，导致 DataflowSolver.init() 崩溃。已通过 try-catch 优雅降级，但 IFDS 求解器无法真正执行 |
+| ~~DummyMain CFG 与 DataflowSolver 不兼容~~ | ~~高~~ | **v2.0.1 已修复**。通过 `linkStmtsToCfg` 中追加 `cfg.updateStmt2BlockMap(block)` 解决 |
 | 有界化约束未实现 | **高** | 项目核心创新点（逻辑组件约束/UI 事件约束/交互约束）尚未实现 |
 | 第三方 UI 框架 | 低 | HdsNavigation 等组件无法解析 ViewTree |
 | NavPathStack API | 中 | pushPath/pushPathByName 未支持 |

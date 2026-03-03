@@ -200,7 +200,7 @@ flowchart LR
 
 ### 待完成
 - [ ] **有界化约束实现**（逻辑组件/UI 事件/交互约束 - 项目核心创新点）
-- [ ] **修复 DummyMain CFG 与 DataflowSolver 兼容性**
+- [x] ~~修复 DummyMain CFG 与 DataflowSolver 兼容性~~ (v2.0.1 已修复)
 - [ ] NavPathStack 导航支持
 - [ ] Lambda 完整支持
 
@@ -234,12 +234,12 @@ flowchart LR
 
 ### 真实项目验证
 
-| 项目 | 难度 | 类 | 方法 | Ability | Component | Source | Sink |
-|------|:----:|---:|-----:|--------:|----------:|-------:|-----:|
-| **RingtoneKit** | 初级 | 5 | 17 | 1 | 1 | 0 | 0 |
-| **UIDesignKit** | 初级 | 14 | 52 | 1 | 3 | 0 | 0 |
-| **CloudFoundationKit** | 中级 | 16 | 49 | 1 | 3 | 0 | 0 |
-| **OxHornCampus** | 高级 | 82 | 244 | 1 | 17 | 9 | 1 |
+| 项目 | 难度 | 类 | 方法 | Source | Sink | IFDS 方法 | IFDS 事实 | 资源泄漏 |
+|------|:----:|---:|-----:|-------:|-----:|----------:|----------:|--------:|
+| **RingtoneKit** | 初级 | 10 | 32 | 0 | 0 | 19 | 169 | 0 |
+| **UIDesignKit** | 初级 | 66 | 169 | 0 | 0 | 54 | 562 | 0 |
+| **CloudFoundationKit** | 中级 | 16 | 49 | 0 | 0 | 22 | 184 | 0 |
+| **OxHornCampus** | 高级 | 392 | 968 | 9 | 1 | 161 | 2644 | **1** |
 
 ### 运行测试
 
@@ -264,6 +264,7 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
+| 2026-03-01 | v2.0.1 | **修复 DummyMain CFG 兼容性** + AccessPath 参数错位，四个真实项目 IFDS 完整通过（OxHornCampus 检出 1 资源泄漏） |
 | 2026-03-01 | v2.0.0 | **污点分析集成**：IFDS 求解器 + 86 条 Source/Sink 规则 + DummyMain 接入 + 4 个真实项目验证 |
 | 2025-03-01 | v1.0.0 | **生命周期建模**：4 个真实华为 Codelab 项目验证通过，JSON5 解析修复 |
 | 2025-02-10 | v0.9.0 | 增强动态路由参数解析，支持对象字面量 URL 提取 |

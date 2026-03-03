@@ -165,15 +165,8 @@ export class TaintAnalysisRunner {
             sourceSinkManager: this.sourceSinkManager,
         });
         
-        let solver: TaintAnalysisSolver;
-        try {
-            solver = new TaintAnalysisSolver(problem, this.scene);
-            solver.solve();
-        } catch (e) {
-            // DataflowSolver.init() 可能因 DummyMain 的 CFG stmtToBlock 映射不完整而失败
-            // 这是 LifecycleModelCreator 构建 CFG 方式的已知局限
-            return this.failResult(`IFDS 求解过程异常: ${e}`);
-        }
+        const solver = new TaintAnalysisSolver(problem, this.scene);
+        solver.solve();
         
         const duration = Date.now() - startTime;
         
