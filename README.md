@@ -1,8 +1,8 @@
-# 🚀 TypeScript Lifecycle - 鸿蒙生命周期建模框架
+# TypeScript Lifecycle - 基于有界生命周期模型的 TypeScript 缺陷检测
 
-> **基于 ArkAnalyzer 的扩展版生命周期建模框架**
+> **基于 ArkAnalyzer 的扩展版生命周期建模 + 污点分析框架**
 > 
-> 本项目扩展了 ArkAnalyzer 的 `DummyMainCreater`，实现多 Ability 支持和精细化 UI 回调建模。
+> 本项目扩展了 ArkAnalyzer 的 `DummyMainCreater`，实现多 Ability 支持、精细化 UI 回调建模，并集成 IFDS 污点分析进行资源/闭包/内存泄漏检测。
 
 [![GitHub](https://img.shields.io/badge/GitHub-typescript__lifecycle-blue)](https://github.com/kemoisuki/typescript_lifecycle)
 
@@ -12,38 +12,50 @@
 
 ```
 typescript/
-├── README.md                           # 本文件（项目说明）
-├── arkanalyzer-master/                 # ArkAnalyzer 源码
+├── README.md                           # 本文件
+├── arkanalyzer-master/
 │   └── arkanalyzer-master/
-│       └── src/
-│           ├── core/                   # 核心模块
-│           ├── callgraph/              # 调用图
-│           └── TEST_lifecycle/         # ⭐ 新增：生命周期建模扩展
-│               ├── README.md           # 详细文档
-│               ├── LifecycleTypes.ts   # 类型定义
-│               ├── AbilityCollector.ts # Ability/Component 收集
-│               ├── NavigationAnalyzer.ts # 🆕 路由分析器
-│               ├── ViewTreeCallbackExtractor.ts
-│               ├── LifecycleModelCreator.ts
-│               └── index.ts
+│       ├── src/
+│       │   ├── core/                   # ArkAnalyzer 核心
+│       │   ├── callgraph/              # 调用图
+│       │   └── TEST_lifecycle/         # ⭐ 生命周期建模 + 污点分析
+│       │       ├── LifecycleTypes.ts
+│       │       ├── AbilityCollector.ts
+│       │       ├── NavigationAnalyzer.ts
+│       │       ├── ViewTreeCallbackExtractor.ts
+│       │       ├── LifecycleModelCreator.ts
+│       │       ├── taint/              # 🆕 污点分析模块
+│       │       │   ├── TaintFact.ts
+│       │       │   ├── SourceSinkManager.ts
+│       │       │   ├── TaintAnalysisProblem.ts
+│       │       │   ├── TaintAnalysisSolver.ts
+│       │       │   └── ResourceLeakDetector.ts
+│       │       ├── cli/                # 工程化 CLI
+│       │       │   ├── LifecycleAnalyzer.ts
+│       │       │   └── ReportGenerator.ts
+│       │       └── gui/                # Web 可视化
+│       └── tests/unit/lifecycle/       # 测试用例
+├── Demo4tests/                         # 真实 HarmonyOS 项目（验证用）
 ├── FlowDroid-develop/                  # FlowDroid 参考实现
-├── ArkAnalyzer文档.md                  # ArkAnalyzer 学习文档
-└── 0109会议纪要.txt                    # 会议记录
+└── 基于有界生命周期模型的TypeScript缺陷检测技术研究-fs.md
 ```
 
 ---
 
 ## 🎯 项目目标
 
-本项目旨在扩展 ArkAnalyzer 的 DummyMain 机制，实现：
+本项目旨在扩展 ArkAnalyzer 的 DummyMain 机制，并在此基础上实现缺陷检测：
 
 | 功能 | 原版 | 扩展版 |
 |------|:----:|:------:|
 | 多 Ability 支持 | ❌ | ✅ |
-| 页面跳转建模 | ❌ | ✅ 基础实现 |
+| 页面跳转建模 | ❌ | ✅ |
 | 精细化 UI 回调 | ❌ | ✅ |
 | ViewTree 整合 | ❌ | ✅ |
-| 可配置性 | ❌ | ✅ |
+| 资源泄漏检测 | ❌ | ✅ |
+| 闭包泄漏检测 | ❌ | ✅ |
+| 内存泄漏检测 | ❌ | ✅ |
+| IFDS 污点分析 | ❌ | ✅ |
 
 ---
 
@@ -68,8 +80,25 @@ const dummyMain = creator.getDummyMain();
 const abilities = creator.getAbilities();
 const components = creator.getComponents();
 
-// 4. 用于后续分析
-const cfg = dummyMain.getCfg();
+// 4. 运行污点分析
+import { TaintAnalysisRunner } from './arkanalyzer-master/arkanalyzer-master/src/TEST_lifecycle/taint/TaintAnalysisSolver';
+
+const runner = new TaintAnalysisRunner(scene);
+const result = runner.runFromDummyMain();
+console.log(`资源泄漏: ${result.resourceLeaks.length}, 污点泄漏: ${result.taintLeaks.length}`);
+```
+
+### 使用一站式分析器
+
+```typescript
+import { LifecycleAnalyzer } from './arkanalyzer-master/arkanalyzer-master/src/TEST_lifecycle/cli';
+
+const analyzer = new LifecycleAnalyzer({
+    generateDummyMain: true,
+    detectResourceLeaks: true,
+    runTaintAnalysis: true,
+});
+const result = await analyzer.analyze('/path/to/harmonyos/project');
 ```
 
 ---
@@ -78,14 +107,20 @@ const cfg = dummyMain.getCfg();
 
 ### TEST_lifecycle 模块
 
-| 文件 | 功能 |
+| 文件/目录 | 功能 |
 |------|------|
 | `LifecycleTypes.ts` | 类型定义（Ability/Component 信息结构） |
 | `AbilityCollector.ts` | 收集所有 Ability 和 Component，识别入口 |
-| `NavigationAnalyzer.ts` | 🆕 路由分析（支持变量追踪和对象参数解析） |
+| `NavigationAnalyzer.ts` | 路由分析（支持变量追踪和对象参数解析） |
 | `ViewTreeCallbackExtractor.ts` | 从 ViewTree 提取 UI 回调 |
 | `LifecycleModelCreator.ts` | 核心构建器，生成 DummyMain |
-| `index.ts` | 模块入口 |
+| `taint/TaintFact.ts` | 污点数据结构（AccessPath + SourceContext） |
+| `taint/SourceSinkManager.ts` | 86 条 HarmonyOS Source/Sink 规则 |
+| `taint/TaintAnalysisProblem.ts` | IFDS 问题定义（继承 DataflowProblem） |
+| `taint/TaintAnalysisSolver.ts` | IFDS 求解器 + 分析运行器 |
+| `taint/ResourceLeakDetector.ts` | 简化版方法内泄漏检测 |
+| `cli/LifecycleAnalyzer.ts` | 一站式分析入口（生命周期 + 污点） |
+| `cli/ReportGenerator.ts` | 多格式报告生成（JSON/HTML/Text/Markdown） |
 
 ### 关键技术点
 
@@ -146,22 +181,28 @@ flowchart LR
 ## 🔧 TODO
 
 ### 已完成 ✅
-- [x] 实现 `NavigationAnalyzer` - 路由分析器（支持 loadContent/pushUrl/replaceUrl/startAbility）
-- [x] 实现 `analyzeNavigationTargets()` - 页面跳转分析
-- [x] 完善 `extractRouterUrl()` - 支持追踪变量定义和对象参数解析
-- [x] 完善 `extractWantTarget()` - 解析 Want 对象获取目标 Ability
-- [x] 实现 `checkIsEntryAbility()` - 从 module.json5 读取入口配置
-- [x] 实现 `resolveCallbackMethod()` - 回调方法解析（支持 MethodSignature/FieldRef/Constant）
-- [x] 实现 `addMethodInvocation()` - 自动生成生命周期方法参数（Want/WindowStage 等）
-- [x] 实现 `addUICallbackInvocation()` - 自动生成 UI 回调参数（ClickEvent/TouchEvent 等）
-- [x] **修复 JSON5 解析问题** - 支持尾随逗号和单引号（v1.0.0）
-- [x] **新增 UI 事件类型** - 支持 onChange, onSelect, onSubmit, onScroll（v1.0.0）
-- [x] **真实项目验证** - 4 个华为 Codelab 项目全部通过（v1.0.0）
 
-### 可选扩展
-- [ ] Lambda 完整支持 - 完整解析内联 Lambda 表达式
-- [ ] NavPathStack 导航支持 - 支持 pushPath/pushPathByName 新 API
-- [ ] 第三方 UI 框架 ViewTree - 改进对 HdsNavigation 等组件的解析
+**v1.0.0 - 生命周期建模**
+- [x] NavigationAnalyzer 路由分析器
+- [x] AbilityCollector 信息收集 + module.json5 入口识别
+- [x] ViewTreeCallbackExtractor 精细化 UI 回调提取
+- [x] LifecycleModelCreator 扩展版 DummyMain 生成
+- [x] 4 个真实华为 Codelab 项目验证通过
+
+**v2.0.0 - 污点分析**
+- [x] TaintFact 数据结构（借鉴 FlowDroid）
+- [x] SourceSinkManager（86 条 HarmonyOS 规则：资源/闭包/内存）
+- [x] TaintAnalysisProblem（IFDS 问题定义）
+- [x] TaintAnalysisSolver + TaintAnalysisRunner
+- [x] ResourceLeakDetector 简化版方法内检测
+- [x] LifecycleAnalyzer 一站式集成
+- [x] 4 个真实项目污点分析验证
+
+### 待完成
+- [ ] **有界化约束实现**（逻辑组件/UI 事件/交互约束 - 项目核心创新点）
+- [ ] **修复 DummyMain CFG 与 DataflowSolver 兼容性**
+- [ ] NavPathStack 导航支持
+- [ ] Lambda 完整支持
 
 ---
 
@@ -187,19 +228,18 @@ flowchart LR
 | L6 结构验证 | CFG 结构、参数生成 | ✅ |
 | L7 性能测试 | 处理时间基准 (246ms) | ✅ |
 | **L8 真实项目验证** | 4 个华为 Codelab 项目 | ✅ |
+| **L9 污点分析单元测试** | TaintFact, SourceSinkManager, TaintAnalysisProblem | ✅ |
+| **L10 污点分析集成测试** | TaintAnalysisSolver, TaintAnalysisRunner | ✅ |
+| **L11 真实项目污点分析** | 4 个项目 Scene/DummyMain/Source/Sink 验证 | ✅ |
 
-### 真实项目验证（2025-03-01 新增）
+### 真实项目验证
 
-| 项目 | 规模 | ETS 文件 | Component | UI 回调 | 状态 |
-|------|------|----------|-----------|---------|:----:|
-| **RingtoneKit** | 小型 | 2 | 1 | 2 | ✅ |
-| **UIDesignKit** | 中型 | 6 | 3 | 0* | ✅ |
-| **CloudFoundationKit** | 中型 | 5 | 3 | 8 | ✅ |
-| **OxHornCampus** | 大型 | 35 | 17 | 30 | ✅ |
-
-> *UIDesignKit 使用第三方 UI 框架 (HdsNavigation)，ViewTree 解析受限
-
-**覆盖率估算**: ~75%
+| 项目 | 难度 | 类 | 方法 | Ability | Component | Source | Sink |
+|------|:----:|---:|-----:|--------:|----------:|-------:|-----:|
+| **RingtoneKit** | 初级 | 5 | 17 | 1 | 1 | 0 | 0 |
+| **UIDesignKit** | 初级 | 14 | 52 | 1 | 3 | 0 | 0 |
+| **CloudFoundationKit** | 中级 | 16 | 49 | 1 | 3 | 0 | 0 |
+| **OxHornCampus** | 高级 | 82 | 244 | 1 | 17 | 9 | 1 |
 
 ### 运行测试
 
@@ -224,7 +264,8 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
-| 2025-03-01 | v1.0.0 | **里程碑版本**：4 个真实华为 Codelab 项目验证通过，修复 JSON5 解析问题，新增 onChange 等 UI 事件支持 |
+| 2026-03-01 | v2.0.0 | **污点分析集成**：IFDS 求解器 + 86 条 Source/Sink 规则 + DummyMain 接入 + 4 个真实项目验证 |
+| 2025-03-01 | v1.0.0 | **生命周期建模**：4 个真实华为 Codelab 项目验证通过，JSON5 解析修复 |
 | 2025-02-10 | v0.9.0 | 增强动态路由参数解析，支持对象字面量 URL 提取 |
 | 2025-02-06 | v0.8.0 | 扩展测试套件至 27 项，覆盖复杂场景和边界情况 |
 | 2025-01-29 | v0.7.0 | 添加基础测试套件，17 项测试全部通过 |

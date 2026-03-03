@@ -88,3 +88,17 @@ export { AbilityCollector } from './AbilityCollector';
 export { ViewTreeCallbackExtractor, extractUICallbacks } from './ViewTreeCallbackExtractor';
 export { LifecycleModelCreator } from './LifecycleModelCreator';
 export { NavigationAnalyzer, analyzeNavigation, NavigationAnalysisResult } from './NavigationAnalyzer';
+
+// ============================================================================
+// 导出 CLI 模块
+// ============================================================================
+
+export { LifecycleAnalyzer, AnalysisResult, AnalysisOptions } from './cli/LifecycleAnalyzer';
+export { ReportGenerator, ReportFormat, ReportOptions } from './cli/ReportGenerator';
+export { runCLI } from './cli/cli';
+
+// ============================================================================
+// 导出 GUI 模块
+// ============================================================================
+
+export { startServer } from './gui/server';

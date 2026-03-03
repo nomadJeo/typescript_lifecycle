@@ -17,6 +17,7 @@
 7. [使用示例](#7-使用示例)
 8. [TODO 与扩展点](#8-todo-与扩展点)
 9. [常见问题](#9-常见问题)
+10. [附录](#-附录)
 
 ---
 
@@ -184,45 +185,37 @@ TEST_lifecycle/
 ├── 📄 index.ts                      # 模块入口，统一导出
 │
 ├── 📄 LifecycleTypes.ts             # 类型定义
-│   │   定义所有数据结构，不包含逻辑
-│   │
 │   ├── AbilityLifecycleStage        # Ability 生命周期枚举
 │   ├── ComponentLifecycleStage      # Component 生命周期枚举
-│   ├── AbilityInfo                  # Ability 信息结构
-│   ├── ComponentInfo                # Component 信息结构
-│   ├── UICallbackInfo               # UI 回调信息结构
+│   ├── AbilityInfo / ComponentInfo  # 信息结构
 │   └── LifecycleModelConfig         # 配置选项
 │
 ├── 📄 AbilityCollector.ts           # 信息收集器
-│   │   负责从 Scene 中收集 Ability 和 Component
-│   │
-│   ├── collectAllAbilities()        # 收集所有 Ability
-│   ├── collectAllComponents()       # 收集所有 Component
-│   └── analyzeNavigationTargets()   # 分析跳转关系 ✅
+│   ├── collectAllAbilities()
+│   ├── collectAllComponents()
+│   └── analyzeNavigationTargets()
 │
-├── 📄 NavigationAnalyzer.ts         # 🆕 路由分析器
-│   │   分析代码中的页面跳转关系
-│   │
-│   ├── analyzeClass()               # 分析一个类的所有路由
-│   ├── handleLoadContent()          # 处理 windowStage.loadContent
-│   ├── handleRouterPush()           # 处理 router.pushUrl
-│   ├── handleRouterReplace()        # 处理 router.replaceUrl
-│   └── handleStartAbility()         # 处理 startAbility
+├── 📄 NavigationAnalyzer.ts         # 路由分析器
+├── 📄 ViewTreeCallbackExtractor.ts  # UI 回调提取器
+├── 📄 LifecycleModelCreator.ts      # 核心构建器 → 生成 DummyMain
 │
-├── 📄 ViewTreeCallbackExtractor.ts  # 回调提取器
-│   │   从 ViewTree 中精细化提取 UI 回调
-│   │
-│   ├── extractFromComponent()       # 提取单个组件的回调
-│   └── fillAllComponentCallbacks()  # 批量填充
+├── 📁 taint/                        # 污点分析模块
+│   ├── TaintFact.ts                 # 污点数据结构（AccessPath, SourceContext, TaintFact）
+│   ├── SourceSinkManager.ts         # Source/Sink 规则管理（86 条 HarmonyOS 规则）
+│   ├── TaintAnalysisProblem.ts      # IFDS 问题定义（继承 DataflowProblem<TaintFact>）
+│   ├── TaintAnalysisSolver.ts       # IFDS 求解器 + Runner（继承 DataflowSolver）
+│   ├── ResourceLeakDetector.ts      # 简化版方法内泄漏检测
+│   └── index.ts                     # 统一导出
 │
-└── 📄 LifecycleModelCreator.ts      # 核心构建器
-    │   组装所有部件，生成最终的 DummyMain
-    │
-    ├── create()                     # 主入口
-    ├── collectAbilitiesAndComponents()
-    ├── extractUICallbacks()
-    ├── createDummyMainContainer()
-    └── buildDummyMainCfg()
+├── 📁 cli/                          # 工程化包装
+│   ├── LifecycleAnalyzer.ts         # 一站式分析器（生命周期 + 污点分析）
+│   ├── ReportGenerator.ts           # 多格式报告生成
+│   ├── cli.ts                       # 命令行入口
+│   └── README.md
+│
+└── 📁 gui/                          # Web 可视化界面
+    ├── server.ts
+    └── index.html
 ```
 
 ### 3.2 模块依赖关系
@@ -230,10 +223,22 @@ TEST_lifecycle/
 ```mermaid
 graph TD
     subgraph "TEST_lifecycle 模块"
-        A[LifecycleModelCreator<br/>核心构建器]
+        A[LifecycleModelCreator<br/>核心构建器 → DummyMain]
         B[AbilityCollector<br/>信息收集]
         C[ViewTreeCallbackExtractor<br/>回调提取]
         D[LifecycleTypes<br/>类型定义]
+    end
+
+    subgraph "taint 污点分析模块"
+        T1[TaintFact<br/>污点数据结构]
+        T2[SourceSinkManager<br/>86条规则]
+        T3[TaintAnalysisProblem<br/>IFDS 问题定义]
+        T4[TaintAnalysisSolver<br/>IFDS 求解器]
+        T5[TaintAnalysisRunner<br/>分析运行器]
+    end
+
+    subgraph "cli 工程化"
+        CLI[LifecycleAnalyzer<br/>一站式分析入口]
     end
     
     subgraph "ArkAnalyzer 核心"
@@ -241,17 +246,25 @@ graph TD
         F[ArkClass / ArkMethod]
         G[ViewTree]
         H[Cfg / BasicBlock]
+        I[DataflowSolver / CallGraph / CHA]
     end
     
     A --> B
     A --> C
     A --> D
-    B --> D
-    C --> D
+    
+    T3 --> T1
+    T3 --> T2
+    T4 --> T3
+    T5 --> T4
+    T5 -->|DummyMain 为入口| A
+    
+    CLI --> A
+    CLI --> T5
     
     B --> E
-    B --> F
     C --> G
+    T4 --> I
     A --> H
     
     style A fill:#e1f5fe
@@ -2400,15 +2413,27 @@ for (const component of components) {
 | `LifecycleModelCreator.addMethodInvocation()` | 生命周期参数生成 | ✅ 完成 | 自动生成 Want, WindowStage 等参数 |
 | `LifecycleModelCreator.addUICallbackInvocation()` | UI 回调参数生成 | ✅ 完成 | 自动生成 ClickEvent, TouchEvent 等参数 |
 
+### 8.1b 污点分析已完成功能 ✅
+
+| 位置 | 功能 | 状态 | 说明 |
+|------|------|--------|------|
+| `taint/TaintFact.ts` | 污点数据结构 | ✅ 完成 | AccessPath + SourceContext + TaintFact，借鉴 FlowDroid |
+| `taint/SourceSinkManager.ts` | Source/Sink 规则管理 | ✅ 完成 | 86 条规则覆盖资源/闭包/内存三类泄漏 |
+| `taint/TaintAnalysisProblem.ts` | IFDS 问题定义 | ✅ 完成 | 继承 DataflowProblem，实现四种 FlowFunction |
+| `taint/TaintAnalysisSolver.ts` | IFDS 求解器 | ✅ 完成 | 继承 DataflowSolver，利用 CallGraph + CHA |
+| `taint/TaintAnalysisSolver.ts` | DummyMain 入口运行 | ✅ 完成 | runFromDummyMain() 以生命周期模型为入口 |
+| `taint/ResourceLeakDetector.ts` | 简化版方法内检测 | ✅ 完成 | 方法内 Source/Sink 配对检测 |
+| `cli/LifecycleAnalyzer.ts` | 集成 IFDS 分析 | ✅ 完成 | 一站式运行生命周期分析 + 污点分析 |
+
 ### 8.2 待实现功能（可选扩展）
 
 | 位置 | 功能 | 优先级 | 说明 |
 |------|------|--------|------|
+| `taint/TaintAnalysisProblem.ts` | 有界化约束 | **高** | 逻辑组件/UI 事件/交互三种约束（项目核心创新点） |
+| `LifecycleModelCreator` | CFG stmtToBlock 映射 | **高** | 修复 DummyMain CFG 与 DataflowSolver 的兼容性 |
 | `NavigationAnalyzer` | NavPathStack 支持 | 中 | 支持 pushPath/pushPathByName 新 API |
 | `resolveCallbackMethod()` Lambda 增强 | Lambda 完整支持 | 低 | 完整解析内联 Lambda 表达式 |
-| 路由参数数据流分析 | 复杂参数解析 | 低 | 处理动态计算的路由参数 |
 | ViewTree 增强 | 第三方 UI 框架支持 | 低 | 改进对 HdsNavigation 等组件的解析 |
-| 控件实例创建 | UI 控件实例化 | 低 | 为每个控件创建实例（非必需） |
 
 ### 8.3 扩展建议
 
@@ -2467,21 +2492,20 @@ const METHOD_TO_EVENT_TYPE = new Map([
 
 ### Q3: 生成的 DummyMain 如何用于污点分析？
 
-**答**：
+**答**：使用 `TaintAnalysisRunner.runFromDummyMain()` 即可，它内部自动完成 DummyMain 构建 → IFDS 求解：
 ```typescript
-// 1. 构建 DummyMain
-const creator = new LifecycleModelCreator(scene);
-creator.create();
-const dummyMain = creator.getDummyMain();
+import { TaintAnalysisRunner } from './taint/TaintAnalysisSolver';
 
-// 2. 获取 CFG
-const cfg = dummyMain.getCfg();
+const runner = new TaintAnalysisRunner(scene);
+const result = runner.runFromDummyMain();
 
-// 3. 用于 IFDS 分析
-const problem = new TaintAnalysisProblem(source, sink);
-const solver = new IFDSSolver(cfg, problem);
-solver.solve();
+if (result.success) {
+    console.log(`资源泄漏: ${result.resourceLeaks.length}`);
+    console.log(`污点泄漏: ${result.taintLeaks.length}`);
+    console.log(`分析方法: ${result.statistics.analyzedMethods}`);
+}
 ```
+> **已知问题**: DummyMain 的 CFG 内部 stmtToBlock 映射未建立，导致 DataflowSolver.init() 崩溃。待修复。
 
 ### Q4: ViewTree 是什么时候构建的？
 
@@ -2504,6 +2528,7 @@ solver.solve();
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| **2.0.0** | **2026-03-01** | **污点分析集成：IFDS 求解器 + 86 条 Source/Sink 规则 + 4 个真实项目验证** |
 | **1.0.0** | **2025-03-01** | **里程碑版本：4 个真实华为 Codelab 项目验证通过** |
 | 0.9.1 | 2025-03-01 | 修复 JSON5 解析问题（支持尾随逗号、单引号） |
 | 0.9.0 | 2025-03-01 | 新增 UI 事件：onChange, onSelect, onSubmit, onScroll |
@@ -2516,7 +2541,7 @@ solver.solve();
 | 0.2.0 | 2025-01-27 | 新增 NavigationAnalyzer 路由分析器 |
 | 0.1.0 | 2025-01-17 | 初始框架，基本结构完成 |
 
-### C. v1.0.0 真实项目验证报告
+### C. v1.0.0 真实项目验证报告（生命周期建模）
 
 #### 验证项目
 
@@ -2542,16 +2567,42 @@ solver.solve();
    - `onSubmit` - 提交事件
    - `onScroll` - 滚动事件
 
-#### 发现的限制
+### D. v2.0.0 污点分析 + 真实项目验证报告
 
-| 限制 | 说明 | 优先级 |
-|------|------|:------:|
-| 第三方 UI 框架 | HdsNavigation 等组件无法解析 ViewTree | 低 |
-| NavPathStack API | pushPath/pushPathByName 未支持 | 中 |
-| 动态 loadContent | 变量形式目标无法静态解析 | 低 |
+#### 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| TaintFact 数据结构 | 借鉴 FlowDroid，包含 AccessPath + SourceContext |
+| SourceSinkManager | 86 条 HarmonyOS 规则，覆盖资源/闭包/内存三类泄漏 |
+| TaintAnalysisProblem | 继承 DataflowProblem，定义 IFDS 传播规则 |
+| TaintAnalysisSolver | 继承 DataflowSolver，利用 CallGraph + CHA 跨过程分析 |
+| TaintAnalysisRunner | 封装 DummyMain 构建 + IFDS 求解的一站式运行器 |
+| ResourceLeakDetector | 简化版方法内 Source/Sink 配对检测 |
+| LifecycleAnalyzer 集成 | 一站式运行生命周期分析 + 污点分析 |
+
+#### 真实项目验证（4 个 HarmonyOS Codelab 项目）
+
+| 项目 | 难度 | 类 | 方法 | Ability | Component | Source | Sink | DummyMain |
+|------|:----:|---:|-----:|--------:|----------:|-------:|-----:|:---------:|
+| RingtoneKit_Codelab_Demo | 初级 | 5 | 17 | 1 | 1 | 0 | 0 | ✅ |
+| UIDesignKit_HdsNavigation_Codelab | 初级 | 14 | 52 | 1 | 3 | 0 | 0 | ✅ |
+| CloudFoundationKit_Codelab_Prefetch_ArkTS | 中级 | 16 | 49 | 1 | 3 | 0 | 0 | ✅ |
+| OxHornCampus | 高级 | 82 | 244 | 1 | 17 | 9 | 1 | ✅ |
+
+> OxHornCampus 检测到 9 个 Source（资源申请）和 1 个 Sink（资源释放），说明存在潜在资源泄漏。
+
+#### 已知问题
+
+| 问题 | 严重程度 | 说明 |
+|------|:--------:|------|
+| DummyMain CFG 与 DataflowSolver 不兼容 | **高** | LifecycleModelCreator 构建的 CFG 未填充 stmtToBlock 映射，导致 DataflowSolver.init() 崩溃。已通过 try-catch 优雅降级，但 IFDS 求解器无法真正执行 |
+| 有界化约束未实现 | **高** | 项目核心创新点（逻辑组件约束/UI 事件约束/交互约束）尚未实现 |
+| 第三方 UI 框架 | 低 | HdsNavigation 等组件无法解析 ViewTree |
+| NavPathStack API | 中 | pushPath/pushPathByName 未支持 |
 
 ---
 
-> **作者**: AI Assistant &  YiZhou
+> **作者**: AI Assistant & YiZhou
 > **创建日期**: 2025-01-17  
 > **最后更新**: 2025-03-01

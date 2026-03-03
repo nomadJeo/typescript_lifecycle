@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HarmonyOS 生命周期分析工具</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .input-group input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .input-group input.valid {
+            border-color: #4caf50;
+        }
+        
+        .input-group input.invalid {
+            border-color: #f44336;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+        
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        
+        .options {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .option-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        
+        .option-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+        
+        .option-item label {
+            color: #555;
+            cursor: pointer;
+        }
+        
+        .status-bar {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+        
+        .status-bar.info {
+            background: #e3f2fd;
+            color: #1565c0;
+            display: block;
+        }
+        
+        .status-bar.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            display: block;
+        }
+        
+        .status-bar.error {
+            background: #ffebee;
+            color: #c62828;
+            display: block;
+        }
+        
+        .status-bar.loading {
+            background: #fff3e0;
+            color: #ef6c00;
+            display: block;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-bar .progress {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            animation: progress 2s ease-in-out infinite;
+        }
+        
+        @keyframes progress {
+            0% { width: 0%; }
+            50% { width: 70%; }
+            100% { width: 100%; }
+        }
+        
+        /* 结果展示区域 */
+        .results {
+            display: none;
+        }
+        
+        .results.show {
+            display: block;
+        }
+        
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .stat-card {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            border-radius: 10px;
+        }
+        
+        .stat-card .value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        
+        .stat-card .label {
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #e0e0e0;
+            margin-bottom: 20px;
+        }
+        
+        .tab {
+            padding: 12px 24px;
+            border: none;
+            background: none;
+            font-size: 16px;
+            cursor: pointer;
+            color: #666;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.3s;
+        }
+        
+        .tab:hover {
+            color: #667eea;
+        }
+        
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        th {
+            background: #f5f5f5;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .tag {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin: 2px;
+        }
+        
+        .tag-entry { background: #e8f5e9; color: #2e7d32; }
+        .tag-lifecycle { background: #e3f2fd; color: #1565c0; }
+        .tag-callback { background: #fff3e0; color: #ef6c00; }
+        
+        .export-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        /* 加载动画 */
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* 响应式 */
+        @media (max-width: 768px) {
+            header h1 { font-size: 1.8em; }
+            .input-group { flex-direction: column; }
+            .summary-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        /* 报告预览模态框 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 900px;
+            max-height: 80vh;
+            overflow: auto;
+            padding: 20px;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+        }
+        
+        .report-preview {
+            font-family: monospace;
+            white-space: pre-wrap;
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 60vh;
+            overflow: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>HarmonyOS 生命周期分析工具</h1>
+            <p>分析鸿蒙应用的 Ability、Component 和 UI 回调结构</p>
+        </header>
+        
+        <!-- 输入区域 -->
+        <div class="card">
+            <h2>📁 项目分析</h2>
+            
+            <div class="input-group">
+                <input type="text" id="projectPath" placeholder="请输入 HarmonyOS 项目路径，例如: C:\Projects\MyHarmonyApp\entry">
+                <button class="btn btn-primary" id="analyzeBtn" onclick="startAnalysis()">
+                    开始分析
+                </button>
+            </div>
+            
+            <div class="options">
+                <div class="option-item">
+                    <input type="checkbox" id="optInferTypes" checked>
+                    <label for="optInferTypes">类型推断</label>
+                </div>
+                <div class="option-item">
+                    <input type="checkbox" id="optDummyMain" checked>
+                    <label for="optDummyMain">生成 DummyMain</label>
+                </div>
+                <div class="option-item">
+                    <input type="checkbox" id="optNavigation" checked>
+                    <label for="optNavigation">导航分析</label>
+                </div>
+                <div class="option-item">
+                    <input type="checkbox" id="optUICallbacks" checked>
+                    <label for="optUICallbacks">UI 回调提取</label>
+                </div>
+            </div>
+            
+            <div class="status-bar" id="statusBar">
+                <span id="statusText"></span>
+                <div class="progress-bar" id="progressBar" style="display: none;">
+                    <div class="progress"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 结果展示区域 -->
+        <div class="results" id="resultsSection">
+            <div class="card">
+                <h2>📊 分析结果</h2>
+                
+                <div class="summary-grid" id="summaryGrid">
+                    <!-- 动态填充 -->
+                </div>
+                
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('abilities')">Ability</button>
+                    <button class="tab" onclick="switchTab('components')">Component</button>
+                    <button class="tab" onclick="switchTab('callbacks')">UI 回调</button>
+                    <button class="tab" onclick="switchTab('navigation')">导航关系</button>
+                    <button class="tab" onclick="switchTab('timing')">耗时统计</button>
+                </div>
+                
+                <div class="tab-content active" id="tab-abilities">
+                    <table id="abilitiesTable">
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>类名</th>
+                                <th>入口</th>
+                                <th>生命周期方法</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
+                <div class="tab-content" id="tab-components">
+                    <table id="componentsTable">
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>类名</th>
+                                <th>生命周期方法</th>
+                                <th>UI 回调数</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
+                <div class="tab-content" id="tab-callbacks">
+                    <div id="callbacksContent"></div>
+                </div>
+                
+                <div class="tab-content" id="tab-navigation">
+                    <table id="navigationTable">
+                        <thead>
+                            <tr>
+                                <th>来源</th>
+                                <th>目标</th>
+                                <th>类型</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
+                <div class="tab-content" id="tab-timing">
+                    <table id="timingTable">
+                        <thead>
+                            <tr>
+                                <th>阶段</th>
+                                <th>耗时</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
+                <div class="export-buttons">
+                    <button class="btn btn-secondary" onclick="exportReport('json')">📄 导出 JSON</button>
+                    <button class="btn btn-secondary" onclick="exportReport('text')">📝 导出 Text</button>
+                    <button class="btn btn-secondary" onclick="exportReport('html')">🌐 导出 HTML</button>
+                    <button class="btn btn-secondary" onclick="exportReport('markdown')">📋 导出 Markdown</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 报告预览模态框 -->
+    <div class="modal" id="reportModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">报告预览</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="report-preview" id="reportPreview"></div>
+            <div style="margin-top: 15px; text-align: right;">
+                <button class="btn btn-primary" onclick="downloadReport()">下载报告</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 全局变量
+        let analysisResult = null;
+        let currentReport = null;
+        let currentReportFormat = null;
+        
+        // 输入框验证
+        const pathInput = document.getElementById('projectPath');
+        let validateTimeout = null;
+        
+        pathInput.addEventListener('input', () => {
+            clearTimeout(validateTimeout);
+            validateTimeout = setTimeout(validatePath, 500);
+        });
+        
+        async function validatePath() {
+            const path = pathInput.value.trim();
+            if (!path) {
+                pathInput.className = '';
+                return;
+            }
+            
+            try {
+                const res = await fetch(`/api/validate?path=${encodeURIComponent(path)}`);
+                const data = await res.json();
+                pathInput.className = data.valid ? 'valid' : 'invalid';
+            } catch (e) {
+                pathInput.className = 'invalid';
+            }
+        }
+        
+        // 显示状态
+        function showStatus(message, type) {
+            const statusBar = document.getElementById('statusBar');
+            const statusText = document.getElementById('statusText');
+            const progressBar = document.getElementById('progressBar');
+            
+            statusBar.className = 'status-bar ' + type;
+            
+            if (type === 'loading') {
+                statusText.innerHTML = '<span class="spinner"></span>' + message;
+                progressBar.style.display = 'block';
+            } else {
+                statusText.textContent = message;
+                progressBar.style.display = 'none';
+            }
+        }
+        
+        // 开始分析
+        async function startAnalysis() {
+            const projectPath = pathInput.value.trim();
+            
+            if (!projectPath) {
+                showStatus('请输入项目路径', 'error');
+                return;
+            }
+            
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            analyzeBtn.disabled = true;
+            
+            showStatus('正在分析项目，请稍候...', 'loading');
+            
+            const options = {
+                inferTypes: document.getElementById('optInferTypes').checked,
+                generateDummyMain: document.getElementById('optDummyMain').checked,
+                analyzeNavigation: document.getElementById('optNavigation').checked,
+                extractUICallbacks: document.getElementById('optUICallbacks').checked,
+            };
+            
+            try {
+                const res = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectPath, options }),
+                });
+                
+                const data = await res.json();
+                
+                if (data.error) {
+                    showStatus('分析失败: ' + data.error, 'error');
+                    analyzeBtn.disabled = false;
+                    return;
+                }
+                
+                analysisResult = data.result;
+                showStatus(`分析完成！耗时 ${data.result.duration.total}ms`, 'success');
+                displayResults(data.result);
+                
+            } catch (error) {
+                showStatus('请求失败: ' + error.message, 'error');
+            }
+            
+            analyzeBtn.disabled = false;
+        }
+        
+        // 显示结果
+        function displayResults(result) {
+            document.getElementById('resultsSection').classList.add('show');
+            
+            // 摘要统计
+            const summaryGrid = document.getElementById('summaryGrid');
+            summaryGrid.innerHTML = `
+                <div class="stat-card">
+                    <div class="value">${result.summary.totalFiles}</div>
+                    <div class="label">文件</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.totalClasses}</div>
+                    <div class="label">类</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.abilityCount}</div>
+                    <div class="label">Ability</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.componentCount}</div>
+                    <div class="label">Component</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.lifecycleMethodCount}</div>
+                    <div class="label">生命周期方法</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.uiCallbackCount}</div>
+                    <div class="label">UI 回调</div>
+                </div>
+            `;
+            
+            // Ability 表格
+            const abilitiesTbody = document.querySelector('#abilitiesTable tbody');
+            abilitiesTbody.innerHTML = result.abilities.map(a => `
+                <tr>
+                    <td>${a.name}</td>
+                    <td>${a.className}</td>
+                    <td>${a.isEntry ? '<span class="tag tag-entry">入口</span>' : '-'}</td>
+                    <td>${a.lifecycleMethods.map(m => `<span class="tag tag-lifecycle">${m}</span>`).join('')}</td>
+                </tr>
+            `).join('');
+            
+            // Component 表格
+            const componentsTbody = document.querySelector('#componentsTable tbody');
+            componentsTbody.innerHTML = result.components.map(c => `
+                <tr>
+                    <td>${c.name}</td>
+                    <td>${c.className}</td>
+                    <td>${c.lifecycleMethods.map(m => `<span class="tag tag-lifecycle">${m}</span>`).join('')}</td>
+                    <td>${c.uiCallbacks.length}</td>
+                </tr>
+            `).join('');
+            
+            // UI 回调统计
+            const callbacksContent = document.getElementById('callbacksContent');
+            const callbackTypes = result.uiCallbacksByType;
+            if (Object.keys(callbackTypes).length > 0) {
+                callbacksContent.innerHTML = `
+                    <table>
+                        <thead>
+                            <tr><th>事件类型</th><th>数量</th><th>占比</th></tr>
+                        </thead>
+                        <tbody>
+                            ${Object.entries(callbackTypes).map(([type, count]) => {
+                                const percent = ((count / result.summary.uiCallbackCount) * 100).toFixed(1);
+                                return `<tr>
+                                    <td><span class="tag tag-callback">${type}</span></td>
+                                    <td>${count}</td>
+                                    <td>${percent}%</td>
+                                </tr>`;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `;
+            } else {
+                callbacksContent.innerHTML = '<p style="color: #666;">未检测到 UI 回调</p>';
+            }
+            
+            // 导航关系
+            const navigationTbody = document.querySelector('#navigationTable tbody');
+            if (result.navigations.length > 0) {
+                navigationTbody.innerHTML = result.navigations.map(n => `
+                    <tr>
+                        <td>${n.source}</td>
+                        <td>${n.target}</td>
+                        <td><span class="tag tag-callback">${n.type}</span></td>
+                    </tr>
+                `).join('');
+            } else {
+                navigationTbody.innerHTML = '<tr><td colspan="3" style="color: #666;">未检测到导航关系</td></tr>';
+            }
+            
+            // 耗时统计
+            const timingTbody = document.querySelector('#timingTable tbody');
+            timingTbody.innerHTML = `
+                <tr><td>Scene 构建</td><td>${result.duration.sceneBuilding}ms</td></tr>
+                <tr><td>Ability 收集</td><td>${result.duration.abilityCollection}ms</td></tr>
+                <tr><td>Component 收集</td><td>${result.duration.componentCollection}ms</td></tr>
+                <tr><td>UI 回调提取</td><td>${result.duration.uiCallbackExtraction}ms</td></tr>
+                <tr><td>导航分析</td><td>${result.duration.navigationAnalysis}ms</td></tr>
+                <tr><td>DummyMain 生成</td><td>${result.duration.dummyMainGeneration}ms</td></tr>
+                <tr style="font-weight: bold;"><td>总耗时</td><td>${result.duration.total}ms</td></tr>
+            `;
+            
+            // 滚动到结果区域
+            document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // 切换标签页
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            document.getElementById('tab-' + tabName).classList.add('active');
+        }
+        
+        // 导出报告
+        async function exportReport(format) {
+            if (!analysisResult) {
+                alert('请先进行分析');
+                return;
+            }
+            
+            try {
+                const res = await fetch('/api/report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        result: analysisResult,
+                        format: format,
+                        title: `${analysisResult.project.name} - 生命周期分析报告`,
+                    }),
+                });
+                
+                const data = await res.json();
+                
+                if (data.error) {
+                    alert('报告生成失败: ' + data.error);
+                    return;
+                }
+                
+                currentReport = data.report;
+                currentReportFormat = format;
+                
+                // 显示预览
+                document.getElementById('modalTitle').textContent = `报告预览 (${format.toUpperCase()})`;
+                document.getElementById('reportPreview').textContent = data.report;
+                document.getElementById('reportModal').classList.add('show');
+                
+            } catch (error) {
+                alert('请求失败: ' + error.message);
+            }
+        }
+        
+        // 关闭模态框
+        function closeModal() {
+            document.getElementById('reportModal').classList.remove('show');
+        }
+        
+        // 下载报告
+        function downloadReport() {
+            if (!currentReport) return;
+            
+            const extensions = { json: 'json', text: 'txt', html: 'html', markdown: 'md' };
+            const mimeTypes = {
+                json: 'application/json',
+                text: 'text/plain',
+                html: 'text/html',
+                markdown: 'text/markdown',
+            };
+            
+            const blob = new Blob([currentReport], { type: mimeTypes[currentReportFormat] });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `lifecycle-report.${extensions[currentReportFormat]}`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            closeModal();
+        }
+        
+        // 点击模态框外部关闭
+        document.getElementById('reportModal').addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                closeModal();
+            }
+        });
+        
+        // Enter 键触发分析
+        pathInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                startAnalysis();
+            }
+        });
+    </script>
+</body>
+</html>
