@@ -307,6 +307,36 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 ---
 
+## 🔄 版本回滚
+
+如需回滚到本次更新（2026-03-07 生命周期分析模块更新）的版本，可使用以下命令：
+
+```bash
+# 1. 查看本次提交的哈希（可选，用于确认）
+git log -1 --oneline
+# 输出示例: 1fd8a95 feat: 生命周期分析模块更新 - 污点分析、测试文档与有界约束
+
+# 2. 回滚到本次提交（保留工作区修改）
+git checkout 1fd8a95
+
+# 3. 若需创建新分支并回滚到该版本
+git checkout -b rollback-20260307 1fd8a95
+
+# 4. 若需强制将 main 分支重置到该版本（慎用，会丢弃之后的提交）
+git reset --hard 1fd8a95
+git push --force typescript_lifecycle main
+```
+
+| 场景 | 推荐命令 |
+|------|----------|
+| 仅本地查看该版本代码 | `git checkout 1fd8a95` |
+| 基于该版本开新分支开发 | `git checkout -b 新分支名 1fd8a95` |
+| 完全丢弃之后提交并推送到远程 | `git reset --hard 1fd8a95` + `git push --force` |
+
+> ⚠️ `git push --force` 会覆盖远程历史，多人协作时请先与团队确认。
+
+---
+
 ## 📄 许可证
 
 本项目基于 Apache License 2.0 许可证。
