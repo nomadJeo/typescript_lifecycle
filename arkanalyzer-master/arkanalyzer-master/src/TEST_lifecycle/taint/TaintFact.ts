@@ -84,7 +84,13 @@ export interface SourceDefinition {
     
     /** 对应的 Sink ID（如果有，用于配对） */
     pairedSinkId?: string;
-    
+
+    /**
+     * 是否污染所有子字段（对于返回复杂对象的 Source）
+     * true 表示对象的所有字段都被视为污染，例如 avPlayer.create() 返回的整个 player 对象
+     */
+    taintSubFields?: boolean;
+
     /** 描述信息 */
     description?: string;
 }
@@ -409,17 +415,23 @@ export class AccessPath {
      */
     hashCode(): number {
         if (this._hashCode !== 0) return this._hashCode;
-        
+
         let hash = 17;
-        hash = hash * 31 + (this.base ? this.base.getName().length : 0);
+        if (this.base) {
+            for (const ch of this.base.getName()) {
+                hash = hash * 31 + ch.charCodeAt(0);
+            }
+        }
         hash = hash * 31 + this.fields.length;
         hash = hash * 31 + (this.taintSubFields ? 1 : 0);
         hash = hash * 31 + (this.isStatic ? 1 : 0);
-        
+
         for (const field of this.fields) {
-            hash = hash * 31 + field.getFieldName().length;
+            for (const ch of field.getFieldName()) {
+                hash = hash * 31 + ch.charCodeAt(0);
+            }
         }
-        
+
         this._hashCode = hash;
         return hash;
     }
@@ -530,7 +542,13 @@ export class TaintFact {
     
     /** 是否是隐式流（条件分支导致的污点） */
     readonly isImplicit: boolean;
-    
+
+    /** 已访问的 Ability 集合（用于有界分析约束1：最多访问 N 个 Ability） */
+    readonly visitedAbilities: ReadonlySet<string>;
+
+    /** 导航跳数（用于有界分析约束3：最多经过 N 次导航） */
+    readonly navigationCount: number;
+
     /** 缓存的哈希值 */
     private _hashCode: number = 0;
     
@@ -546,7 +564,9 @@ export class TaintFact {
         predecessor: TaintFact | null,
         currentStmt: IStmt | null,
         propagationDepth: number,
-        isImplicit: boolean
+        isImplicit: boolean,
+        visitedAbilities: ReadonlySet<string> = new Set(),
+        navigationCount: number = 0
     ) {
         this.accessPath = accessPath;
         this.sourceContext = sourceContext;
@@ -554,6 +574,8 @@ export class TaintFact {
         this.currentStmt = currentStmt;
         this.propagationDepth = propagationDepth;
         this.isImplicit = isImplicit;
+        this.visitedAbilities = visitedAbilities;
+        this.navigationCount = navigationCount;
     }
     
     // ========================================================================
@@ -654,10 +676,12 @@ export class TaintFact {
             this,
             currentStmt,
             this.propagationDepth + 1,
-            this.isImplicit
+            this.isImplicit,
+            this.visitedAbilities,
+            this.navigationCount
         );
     }
-    
+
     /**
      * 派生新污点 - 保持访问路径，更新当前语句
      */
@@ -671,7 +695,9 @@ export class TaintFact {
             this,
             currentStmt,
             this.propagationDepth + 1,
-            this.isImplicit
+            this.isImplicit,
+            this.visitedAbilities,
+            this.navigationCount
         );
     }
     
@@ -715,7 +741,43 @@ export class TaintFact {
             this,
             currentStmt,
             this.propagationDepth + 1,
-            true
+            true,
+            this.visitedAbilities,
+            this.navigationCount
+        );
+    }
+
+    /**
+     * 派生新污点 - 进入新 Ability（约束1：Ability 访问计数）
+     */
+    deriveEnteringAbility(abilityName: string, stmt: IStmt): TaintFact {
+        const newVisited = new Set(this.visitedAbilities);
+        newVisited.add(abilityName);
+        return new TaintFact(
+            this.accessPath,
+            this.sourceContext,
+            this,
+            stmt,
+            this.propagationDepth + 1,
+            this.isImplicit,
+            newVisited,
+            this.navigationCount
+        );
+    }
+
+    /**
+     * 派生新污点 - 经过导航调用（约束3：导航跳数计数）
+     */
+    deriveAfterNavigation(stmt: IStmt): TaintFact {
+        return new TaintFact(
+            this.accessPath,
+            this.sourceContext,
+            this,
+            stmt,
+            this.propagationDepth + 1,
+            this.isImplicit,
+            this.visitedAbilities,
+            this.navigationCount + 1
         );
     }
     
@@ -775,7 +837,12 @@ export class TaintFact {
         
         if (!this.accessPath.equals(other.accessPath)) return false;
         if (this.isImplicit !== other.isImplicit) return false;
-        
+        if (this.navigationCount !== other.navigationCount) return false;
+        if (this.visitedAbilities.size !== other.visitedAbilities.size) return false;
+        for (const a of this.visitedAbilities) {
+            if (!other.visitedAbilities.has(a)) return false;
+        }
+
         return true;
     }
     
@@ -784,20 +851,37 @@ export class TaintFact {
      */
     hashCode(): number {
         if (this._hashCode !== 0) return this._hashCode;
-        
-        this._hashCode = this.accessPath.hashCode() * 31 + (this.isImplicit ? 1 : 0);
-        return this._hashCode;
+
+        let hash = this.accessPath.hashCode() * 31 + (this.isImplicit ? 1 : 0);
+        hash = hash * 31 + this.navigationCount;
+        // XOR for order-independent set hashing
+        let abilityHash = 0;
+        for (const a of this.visitedAbilities) {
+            let h = 0;
+            for (const ch of a) {
+                h = h * 31 + ch.charCodeAt(0);
+            }
+            abilityHash ^= h;
+        }
+        hash = hash * 31 + abilityHash;
+
+        this._hashCode = hash;
+        return hash;
     }
     
     /**
      * 转为字符串表示
      */
     toString(): string {
-        const source = this.sourceContext 
-            ? `[${this.sourceContext.definition.resourceType}]` 
+        const source = this.sourceContext
+            ? `[${this.sourceContext.definition.resourceType}]`
             : '';
         const implicit = this.isImplicit ? '(implicit)' : '';
-        return `${source}${this.accessPath.toString()}${implicit}@depth=${this.propagationDepth}`;
+        const nav = this.navigationCount > 0 ? `;nav=${this.navigationCount}` : '';
+        const abilities = this.visitedAbilities.size > 0
+            ? `;abilities=${[...this.visitedAbilities].join(',')}`
+            : '';
+        return `${source}${this.accessPath.toString()}${implicit}@depth=${this.propagationDepth}${nav}${abilities}`;
     }
 }
 

@@ -31,45 +31,28 @@
  *    - 分析 startAbility/router.pushUrl 等调用
  *    - 在 CFG 中体现跳转关系
  * 
- * 生成的 DummyMain 结构：
+ * 生成的 DummyMain 结构（循环展开版，k = bounds.maxCallbackIterations）：
  * ```
  * function @extendedDummyMain() {
  *     // 1. 静态初始化
  *     staticInit()
- *     
- *     // 2. 对每个 Ability:
- *     while (true) {
- *         // 2.1 创建 Ability 实例
- *         ability1 = new Ability1()
- *         
- *         // 2.2 调用生命周期方法
- *         ability1.onCreate(want)
- *         ability1.onWindowStageCreate(windowStage)
- *         ability1.onForeground()
- *         
- *         // 2.3 加载关联的 Component
- *         component1 = new Component1()
- *         component1.aboutToAppear()
- *         component1.build()
- *         
- *         // 2.4 精细化调用 UI 回调
- *         // Button 控件的 onClick
- *         button1.onClick()
- *         // Text 控件的 onAppear
- *         text1.onAppear()
- *         
- *         // 2.5 模拟跳转到其他 Ability
- *         if (count == x) {
- *             ability2.onCreate(...)
- *         }
- *         
- *         // 2.6 调用后台/销毁生命周期
- *         ability1.onBackground()
- *         ability1.onDestroy()
- *     }
+ *     count = 0
+ *
+ *     // 2. 循环展开 k 次（k=1 时 CFG 为 DAG）
+ *     // --- Round 1 ---
+ *     if (count == 1) { ability1.onCreate(...); ...; ability1.onDestroy() }
+ *     if (count == 2) { ability2.onCreate(...); ...; ability2.onDestroy() }
+ *     if (count == 3) { comp1.aboutToAppear(); comp1.build(); comp1.onClick() }
+ *     ...
+ *     // --- Round 2 (k>=2) ---
+ *     if (count == 1) { ability1.onCreate(...); ... }
+ *     ...
+ *
  *     return
  * }
  * ```
+ *
+ * k=1 时每个回调只出现一次，CFG 为 DAG，IFDS 单趟即可结束（有界约束2）。
  */
 
 import { Scene } from '../Scene';
@@ -107,12 +90,12 @@ import { ViewTreeCallbackExtractor } from './ViewTreeCallbackExtractor';
 import {
     AbilityInfo,
     ComponentInfo,
-    AbilityLifecycleStage,
     ComponentLifecycleStage,
     UICallbackInfo,
     UIEventType,
     LifecycleModelConfig,
     DEFAULT_LIFECYCLE_CONFIG,
+    BoundsConfig,
 } from './LifecycleTypes';
 
 // ============================================================================
@@ -174,8 +157,16 @@ export class LifecycleModelCreator {
      */
     constructor(scene: Scene, config?: Partial<LifecycleModelConfig>) {
         this.scene = scene;
-        this.config = { ...DEFAULT_LIFECYCLE_CONFIG, ...config };
-        
+        // bounds 需要深合并，避免传入部分 bounds 时丢失其余默认值
+        this.config = {
+            ...DEFAULT_LIFECYCLE_CONFIG,
+            ...config,
+            bounds: {
+                ...DEFAULT_LIFECYCLE_CONFIG.bounds,
+                ...(config?.bounds ?? {}),
+            } as BoundsConfig,
+        };
+
         // 初始化收集器
         this.abilityCollector = new AbilityCollector(scene);
         this.callbackExtractor = new ViewTreeCallbackExtractor(scene);
@@ -233,6 +224,30 @@ export class LifecycleModelCreator {
      */
     public getComponents(): ComponentInfo[] {
         return this.components;
+    }
+
+    /**
+     * 获取当前有界约束配置
+     */
+    public getBounds(): BoundsConfig {
+        return this.config.bounds;
+    }
+
+    /**
+     * 获取"方法 → 所属 Ability 类名"映射
+     *
+     * 供 Phase 2（IFDS 层 Ability 数量约束）使用：
+     * 当某条数据流经过某方法时，可查询该方法属于哪个 Ability，
+     * 从而在 TaintFact 中追踪已访问的 Ability 集合。
+     */
+    public getAbilityMethodSet(): Map<ArkMethod, string> {
+        const result = new Map<ArkMethod, string>();
+        for (const ability of this.abilities) {
+            for (const [, method] of ability.lifecycleMethods) {
+                result.set(method, ability.arkClass.getName());
+            }
+        }
+        return result;
     }
 
     // ========================================================================
@@ -331,63 +346,74 @@ export class LifecycleModelCreator {
     // ========================================================================
 
     /**
-     * 构建 DummyMain 的控制流图
+     * 构建 DummyMain 的控制流图（循环展开版）
+     *
+     * 生成结构（k = config.bounds.maxCallbackIterations）：
+     * ```
+     * entryBlock (静态初始化)
+     *   ↓
+     * [第 1 轮]
+     *   if(count==1) → Ability1Block_1
+     *   if(count==2) → Ability2Block_1
+     *   if(count==3) → Comp1Block_1
+     *   ...
+     *   ↓
+     * [第 2 轮]  (k >= 2 时)
+     *   if(count==1) → Ability1Block_2
+     *   ...
+     *   ↓
+     * returnBlock
+     * ```
+     *
+     * k=1 时 CFG 为 DAG（无环），IFDS 单趟扫描即可结束，
+     * 避免了原 while(true) 循环导致的无界不动点迭代。
      */
     private buildDummyMainCfg(): void {
         const cfg = new Cfg();
         cfg.setDeclaringMethod(this.dummyMain);
-        
+
         // 创建入口基本块
         const entryBlock = new BasicBlock();
         cfg.addBlock(entryBlock);
-        
+
         // 4.1 添加静态初始化
         this.addStaticInitialization(cfg, entryBlock);
-        
-        // 4.2 创建主循环结构
-        const { whileBlock, countLocal } = this.createMainLoopStructure(cfg, entryBlock);
-        
-        // 4.3 为每个 Ability 添加生命周期调用
-        let lastBlocks: BasicBlock[] = [whileBlock];
-        let branchCount = 0;
-        
-        for (const ability of this.abilities) {
-            branchCount++;
-            lastBlocks = this.addAbilityLifecycleBranch(
-                cfg,
-                ability,
-                lastBlocks,
-                countLocal,
-                branchCount
-            );
+
+        // 4.2 创建共享计数器变量（用于 if-branch 的非确定性条件）
+        const countLocal = new Local('count', NumberType.getInstance());
+        const zero = ValueUtil.getOrCreateNumberConst(0);
+        entryBlock.addStmt(new ArkAssignStmt(countLocal, zero));
+
+        // 4.3 循环展开：重复 maxCallbackIterations 轮，每轮生成相同的分支结构
+        const maxIter = this.config.bounds.maxCallbackIterations;
+        let lastBlocks: BasicBlock[] = [entryBlock];
+
+        for (let iter = 0; iter < maxIter; iter++) {
+            let branchIdx = 0;
+
+            // 每轮为所有 Ability 添加生命周期调用分支
+            for (const ability of this.abilities) {
+                lastBlocks = this.addAbilityLifecycleBranch(
+                    cfg, ability, lastBlocks, countLocal, ++branchIdx
+                );
+            }
+
+            // 每轮为所有 Component 添加生命周期和 UI 回调调用分支
+            for (const component of this.components) {
+                lastBlocks = this.addComponentLifecycleBranch(
+                    cfg, component, lastBlocks, countLocal, ++branchIdx
+                );
+            }
         }
-        
-        // 4.4 为每个 Component 添加生命周期和回调调用
-        for (const component of this.components) {
-            branchCount++;
-            lastBlocks = this.addComponentLifecycleBranch(
-                cfg,
-                component,
-                lastBlocks,
-                countLocal,
-                branchCount
-            );
-        }
-        
-        // 4.5 连接回主循环
-        for (const block of lastBlocks) {
-            block.addSuccessorBlock(whileBlock);
-            whileBlock.addPredecessorBlock(block);
-        }
-        
-        // 4.6 添加返回块
-        const returnBlock = this.createReturnBlock(cfg, whileBlock);
-        
+
+        // 4.4 添加返回块（直接连接最后一轮的末尾块，无 back-edge）
+        this.createReturnBlock(cfg, lastBlocks);
+
         // 设置方法体
         const locals = new Set(this.classInstanceMap.values());
         const body = new ArkBody(locals, cfg);
         this.dummyMain.setBody(body);
-        
+
         // 为所有语句设置 CFG 引用
         this.linkStmtsToCfg(cfg);
     }
@@ -419,38 +445,6 @@ export class LifecycleModelCreator {
             cfg.setStartingStmt(assignStmt);
             entryBlock.addStmt(assignStmt);
         }
-    }
-
-    /**
-     * 创建主循环结构
-     */
-    private createMainLoopStructure(
-        cfg: Cfg,
-        entryBlock: BasicBlock
-    ): { whileBlock: BasicBlock; countLocal: Local } {
-        // 创建计数器变量
-        const countLocal = new Local('count', NumberType.getInstance());
-        const zero = ValueUtil.getOrCreateNumberConst(0);
-        const countAssign = new ArkAssignStmt(countLocal, zero);
-        entryBlock.addStmt(countAssign);
-        
-        // 创建 while(true) 循环块
-        const whileBlock = new BasicBlock();
-        const trueConst = ValueUtil.getBooleanConstant(true);
-        const condition = new ArkConditionExpr(
-            trueConst,
-            zero,
-            RelationalBinaryOperator.Equality
-        );
-        const whileStmt = new ArkIfStmt(condition);
-        whileBlock.addStmt(whileStmt);
-        cfg.addBlock(whileBlock);
-        
-        // 连接入口块到循环块
-        entryBlock.addSuccessorBlock(whileBlock);
-        whileBlock.addPredecessorBlock(entryBlock);
-        
-        return { whileBlock, countLocal };
     }
 
     /**
@@ -573,17 +567,21 @@ export class LifecycleModelCreator {
     }
 
     /**
-     * 创建返回块
+     * 创建返回块，并将其连接到给定的所有前驱块
+     *
+     * 循环展开后不再有 whileBlock，改为将最后一轮的末尾块直接连向 returnBlock。
      */
-    private createReturnBlock(cfg: Cfg, whileBlock: BasicBlock): BasicBlock {
+    private createReturnBlock(cfg: Cfg, predecessors: BasicBlock[]): BasicBlock {
         const returnBlock = new BasicBlock();
         const returnStmt = new ArkReturnVoidStmt();
         returnBlock.addStmt(returnStmt);
         cfg.addBlock(returnBlock);
-        
-        whileBlock.addSuccessorBlock(returnBlock);
-        returnBlock.addPredecessorBlock(whileBlock);
-        
+
+        for (const block of predecessors) {
+            block.addSuccessorBlock(returnBlock);
+            returnBlock.addPredecessorBlock(block);
+        }
+
         return returnBlock;
     }
 
@@ -909,7 +907,8 @@ export class LifecycleModelCreator {
             
             // 如果参数类型未知，尝试根据事件类型推断
             if (!paramType) {
-                paramType = this.inferEventParamType(callback.eventType);
+                const inferred = this.inferEventParamType(callback.eventType);
+                if (inferred) paramType = inferred;
             }
             
             // 如果仍然无法获取类型，跳过该参数

@@ -3,7 +3,7 @@
  * 目标：分析 NavigationAnalyzer 对各种动态 URL 的处理能力
  */
 
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, it, beforeAll } from 'vitest';
 import path from 'path';
 import { Scene, SceneConfig } from '../../../src/index';
 import { Sdk } from '../../../src/Config';
@@ -66,12 +66,12 @@ describe('动态路由参数追踪分析', () => {
                         console.log(`\n  方法: ${methodName}()`);
                         
                         for (const target of targets) {
-                            console.log(`    类型: ${target.type}`);
-                            console.log(`    目标: ${target.targetComponent || target.targetAbility || '未解析'}`);
-                            
+                            console.log(`    类型: ${target.navigationType}`);
+                            console.log(`    目标: ${target.targetAbilityName || '未解析'}`);
+
                             results.push({
                                 method: methodName,
-                                urls: [target.targetComponent || target.targetAbility || '未解析']
+                                urls: [target.targetAbilityName || '未解析']
                             });
                         }
                     }

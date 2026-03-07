@@ -29,7 +29,7 @@
 import { Scene } from '../../Scene';
 import { ArkMethod } from '../../core/model/ArkMethod';
 import { ArkClass } from '../../core/model/ArkClass';
-import { Stmt, ArkAssignStmt, ArkInvokeStmt, ArkReturnStmt } from '../../core/base/Stmt';
+import { Stmt, ArkAssignStmt, ArkInvokeStmt } from '../../core/base/Stmt';
 import { Local } from '../../core/base/Local';
 import { Value } from '../../core/base/Value';
 import { ArkInstanceInvokeExpr, ArkStaticInvokeExpr, AbstractInvokeExpr } from '../../core/base/Expr';

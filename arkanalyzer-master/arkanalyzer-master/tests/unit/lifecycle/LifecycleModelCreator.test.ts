@@ -33,7 +33,6 @@ import {
     LifecycleModelCreator,
     AbilityCollector,
     ViewTreeCallbackExtractor,
-    NavigationAnalyzer,
     AbilityLifecycleStage,
     ComponentLifecycleStage,
 } from '../../../src/TEST_lifecycle';
@@ -200,11 +199,9 @@ describe('Level 1: NavigationAnalyzer 单元测试', () => {
     
     describe('1.4 路由分析测试', () => {
         let scene: Scene;
-        let analyzer: NavigationAnalyzer;
-        
+
         beforeAll(() => {
             scene = buildScene('router');
-            analyzer = new NavigationAnalyzer(scene);
         });
 
         it('1.4.1 应该能分析 router.pushUrl', () => {
@@ -280,7 +277,7 @@ describe('Level 2: 集成测试', () => {
                 console.log(`[Test]   - ${ability.name}`);
                 if (ability.navigationTargets.length > 0) {
                     for (const nav of ability.navigationTargets) {
-                        console.log(`[Test]     -> ${nav.targetComponent || nav.targetAbility}`);
+                        console.log(`[Test]     -> ${nav.targetAbilityName || 'unknown'}`);
                     }
                 }
             }
@@ -608,7 +605,7 @@ describe('Level 6: DummyMain 结构验证', () => {
                 console.log(`[Test]   导航目标数: ${ability.navigationTargets.length}`);
                 
                 for (const target of ability.navigationTargets) {
-                    console.log(`[Test]   -> ${target.targetComponent || target.targetAbility || 'unknown'}`);
+                    console.log(`[Test]   -> ${target.targetAbilityName || 'unknown'}`);
                 }
             }
         });

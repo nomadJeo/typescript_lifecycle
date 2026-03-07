@@ -27,7 +27,7 @@
 import { ArkClass } from '../core/model/ArkClass';
 import { ArkMethod } from '../core/model/ArkMethod';
 import { ArkField } from '../core/model/ArkField';
-import { ClassSignature, MethodSignature } from '../core/model/ArkSignature';
+import { ClassSignature } from '../core/model/ArkSignature';
 import { ViewTreeNode } from '../core/graph/ViewTree';
 
 // ============================================================================
@@ -238,23 +238,60 @@ export enum UIEventType {
 // ============================================================================
 
 /**
+ * 有界约束配置
+ *
+ * 对应论文中的三条约束：
+ * - 约束1（Ability 数量）：单条数据流最多流经 maxAbilitiesPerFlow 个不同 Ability
+ * - 约束2（UI 事件响应次数）：Ability+Component 生命周期序列最多重复 maxCallbackIterations 次
+ * - 约束3（路由跳转次数）：单条数据流最多经历 maxNavigationHops 次页面路由跳转
+ */
+export interface BoundsConfig {
+    /**
+     * 约束2：整个 Ability+Component 生命周期回调序列的最大重复次数（循环展开次数）
+     *
+     * - 1 = 每个回调只执行一次，DummyMain CFG 变为 DAG（推荐，默认值）
+     * - 2+ = 允许重复，覆盖更多路径但分析代价更高
+     *
+     * 此参数直接控制 CFG 结构，由 LifecycleModelCreator 在构建时消费。
+     */
+    maxCallbackIterations: number;
+
+    /**
+     * 约束1：单条数据流最多流经几个不同的 Ability（0 = 不限制）
+     *
+     * 由 IFDS 层在 TaintFact 传播时检查（Phase 2 实现）。
+     */
+    maxAbilitiesPerFlow: number;
+
+    /**
+     * 约束3：单条数据流最多经历几次页面路由跳转（0 = 不限制）
+     *
+     * 由 IFDS 层在检测到 router.pushUrl / startAbility 时检查（Phase 2 实现）。
+     */
+    maxNavigationHops: number;
+}
+
+/**
  * 扩展 DummyMain 的配置选项
  */
 export interface LifecycleModelConfig {
     /** 是否包含多 Ability 跳转建模 */
     enableMultiAbilityNavigation: boolean;
-    
+
     /** 是否精细化建模 UI 回调（按控件实例化） */
     enableFineGrainedUICallbacks: boolean;
-    
+
     /** 是否解析 ViewTree 提取回调 */
     enableViewTreeParsing: boolean;
-    
+
     /** 生命周期方法调用顺序（可自定义） */
     lifecycleOrder: AbilityLifecycleStage[];
-    
+
     /** 最大跳转深度（防止无限循环） */
     maxNavigationDepth: number;
+
+    /** 有界约束配置 */
+    bounds: BoundsConfig;
 }
 
 /**
@@ -273,4 +310,9 @@ export const DEFAULT_LIFECYCLE_CONFIG: LifecycleModelConfig = {
         AbilityLifecycleStage.DESTROY,
     ],
     maxNavigationDepth: 10,
+    bounds: {
+        maxCallbackIterations: 1,   // 默认：单次展开，DummyMain 为 DAG
+        maxAbilitiesPerFlow: 3,     // 默认：最多跨 3 个 Ability
+        maxNavigationHops: 5,       // 默认：最多 5 次路由跳转
+    },
 };

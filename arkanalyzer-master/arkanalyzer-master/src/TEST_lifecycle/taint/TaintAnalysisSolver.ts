@@ -29,7 +29,7 @@ import { DataflowSolver } from '../../core/dataflow/DataflowSolver';
 import { Stmt } from '../../core/base/Stmt';
 import { ArkMethod } from '../../core/model/ArkMethod';
 
-import { TaintFact, SourceDefinition } from './TaintFact';
+import { TaintFact } from './TaintFact';
 import { TaintAnalysisProblem, TaintAnalysisConfig, ResourceLeak, TaintLeak } from './TaintAnalysisProblem';
 import { SourceSinkManager } from './SourceSinkManager';
 import { LifecycleModelCreator } from '../LifecycleModelCreator';
@@ -136,8 +136,14 @@ export class TaintAnalysisRunner {
         
         // Step 1: 构建 DummyMain
         let dummyMain: ArkMethod;
+        let creator: LifecycleModelCreator;
         try {
-            const creator = new LifecycleModelCreator(this.scene);
+            // 将约束2（maxCallbackIterations）传入 LifecycleModelCreator 的 bounds 配置
+            // LifecycleModelCreator 构造函数会深合并 bounds，缺省字段使用 DEFAULT_LIFECYCLE_CONFIG.bounds 填充
+            const lifecycleConfig = this.config.maxCallbackIterations !== undefined
+                ? { bounds: { maxCallbackIterations: this.config.maxCallbackIterations } as any }
+                : undefined;
+            creator = new LifecycleModelCreator(this.scene, lifecycleConfig);
             creator.create();
             dummyMain = creator.getDummyMain();
         } catch (e) {
@@ -159,10 +165,11 @@ export class TaintAnalysisRunner {
             return this.failResult('无法获取 DummyMain 的入口语句');
         }
         
-        // Step 3: 创建问题 + 求解
+        // Step 3: 创建问题 + 求解（传入 abilityMethodMap 以启用约束1/约束3）
         const problem = new TaintAnalysisProblem(entryStmt, dummyMain, {
             ...this.config,
             sourceSinkManager: this.sourceSinkManager,
+            abilityMethodMap: creator.getAbilityMethodSet(),
         });
         
         const solver = new TaintAnalysisSolver(problem, this.scene);

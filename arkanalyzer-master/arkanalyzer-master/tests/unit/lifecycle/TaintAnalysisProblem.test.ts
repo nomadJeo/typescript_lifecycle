@@ -119,17 +119,18 @@ describe('FlowFunctions', () => {
                 category: 'resource',
                 returnTainted: true,
                 taintedParamIndices: [],
+                resourceType: 'TestResource',
             };
             const stmt = createMockStmt();
             const fact = TaintFact.createFromSource(ap, sourceDef, stmt);
-            
+
             const result = ff.getDataFacts(fact);
-            
+
             expect(result.size).toBe(1);
             expect(result.has(fact)).toBe(true);
         });
     });
-    
+
     describe('GenFlowFunction', () => {
         it('应该生成新的污点并保留原有污点', () => {
             const local = createMockLocal('y');
@@ -140,6 +141,7 @@ describe('FlowFunctions', () => {
                 category: 'resource',
                 returnTainted: true,
                 taintedParamIndices: [],
+                resourceType: 'TestResource',
             };
             const stmt = createMockStmt();
             const newFact = TaintFact.createFromSource(ap, sourceDef, stmt);
@@ -181,12 +183,13 @@ describe('TaintAnalysisProblem 概念验证', () => {
                 category: 'resource',
                 returnTainted: true,
                 taintedParamIndices: [],
+                resourceType: 'TestResource',
             };
             const stmt = createMockStmt();
-            
+
             const fact1 = TaintFact.createFromSource(ap, sourceDef, stmt);
             const fact2 = TaintFact.createFromSource(ap, sourceDef, stmt);
-            
+
             expect(fact1.equals(fact2)).toBe(true);
         });
         
@@ -201,12 +204,13 @@ describe('TaintAnalysisProblem 概念验证', () => {
                 category: 'resource',
                 returnTainted: true,
                 taintedParamIndices: [],
+                resourceType: 'TestResource',
             };
             const stmt = createMockStmt();
-            
+
             const fact1 = TaintFact.createFromSource(ap1, sourceDef, stmt);
             const fact2 = TaintFact.createFromSource(ap2, sourceDef, stmt);
-            
+
             expect(fact1.equals(fact2)).toBe(false);
         });
     });
@@ -299,7 +303,7 @@ describe('TaintAnalysisProblem 集成概念', () => {
         const stmt2 = createMockStmt(20);
         
         const fact1 = TaintFact.createFromSource(ap, sourceDef, stmt1);
-        const fact2 = fact1.deriveWithNewStmt(ap, stmt2);
+        const fact2 = fact1.deriveWithNewStmt(stmt2);
         
         const path = fact2.getPropagationPath();
         

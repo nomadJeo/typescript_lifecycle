@@ -381,7 +381,6 @@ describe('OxHornCampus（溪村小镇）大规模项目分析', () => {
                         console.log(`  回调数量: ${callbacks.length}`);
                         
                         for (const cb of callbacks.slice(0, 5)) {
-                            const methodName = cb.callbackMethod?.getName() || 'inline';
                             console.log(`    - ${cb.componentType}.${cb.eventType}`);
                         }
                         if (callbacks.length > 5) {

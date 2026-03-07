@@ -199,23 +199,25 @@ TEST_lifecycle/
 ├── 📄 ViewTreeCallbackExtractor.ts  # UI 回调提取器
 ├── 📄 LifecycleModelCreator.ts      # 核心构建器 → 生成 DummyMain
 │
-├── 📁 taint/                        # 污点分析模块
+├── 📁 taint/                        # 污点分析模块（技术细节见 taint/README.md）
+│   ├── README.md                    # 污点分析技术说明（入门与各文件职责）
 │   ├── TaintFact.ts                 # 污点数据结构（AccessPath, SourceContext, TaintFact）
-│   ├── SourceSinkManager.ts         # Source/Sink 规则管理（86 条 HarmonyOS 规则）
+│   ├── SourceSinkManager.ts         # Source/Sink 规则管理（HarmonyOS 资源/闭包/内存/分布式/display）
 │   ├── TaintAnalysisProblem.ts      # IFDS 问题定义（继承 DataflowProblem<TaintFact>）
-│   ├── TaintAnalysisSolver.ts       # IFDS 求解器 + Runner（继承 DataflowSolver）
+│   ├── TaintAnalysisSolver.ts       # IFDS 求解器 + TaintAnalysisRunner（DummyMain 入口）
 │   ├── ResourceLeakDetector.ts      # 简化版方法内泄漏检测
 │   └── index.ts                     # 统一导出
 │
-├── 📁 cli/                          # 工程化包装
+├── 📁 cli/                          # 工程化包装（详见 cli/README.md）
 │   ├── LifecycleAnalyzer.ts         # 一站式分析器（生命周期 + 污点分析）
-│   ├── ReportGenerator.ts           # 多格式报告生成
+│   ├── ReportGenerator.ts          # 多格式报告生成
 │   ├── cli.ts                       # 命令行入口
 │   └── README.md
 │
-└── 📁 gui/                          # Web 可视化界面
-    ├── server.ts
-    └── index.html
+└── 📁 gui/                          # Web 可视化界面（详见 gui/README.md）
+    ├── server.ts                    # HTTP 服务与 /api/analyze、/api/report
+    ├── start.ts                     # 启动脚本
+    └── README.md
 ```
 
 ### 3.2 模块依赖关系
@@ -1430,7 +1432,7 @@ ViewTree 结构:                    提取结果:
 
 ---
 
-### 4.4 LifecycleModelCreator.ts — 核心构建器
+### 4.5 LifecycleModelCreator.ts — 核心构建器
 
 **角色**：总指挥，协调所有部件，生成最终的 DummyMain。
 
@@ -2080,6 +2082,33 @@ private createParameterLocals(method: ArkMethod, block: BasicBlock): Local[] {
 
 ---
 
+### 4.6 污点分析模块（taint/）
+
+污点分析用于在**整程序**层面追踪“资源/闭包/内存”从产生点（Source）到释放点（Sink）的流动，并报告未被正确释放的泄漏。本模块与生命周期建模紧密配合：以 **DummyMain** 为入口进行 IFDS 分析，从而覆盖多 Ability、多回调路径。
+
+**各文件职责简述**：
+
+| 文件 | 职责 |
+|------|------|
+| `TaintFact.ts` | 污点数据结构（AccessPath、SourceContext、TaintFact），借鉴 FlowDroid |
+| `SourceSinkManager.ts` | Source/Sink 规则库的注册与匹配（HarmonyOS 资源/闭包/内存/分布式/display 等） |
+| `TaintAnalysisProblem.ts` | 实现 `DataflowProblem<TaintFact>`：传播规则、Source/Sink 处理、有界约束 1/3、泄漏判定 |
+| `TaintAnalysisSolver.ts` | IFDS 求解器 + **TaintAnalysisRunner**（构建 DummyMain、调用求解、汇总报告） |
+| `ResourceLeakDetector.ts` | 仅方法内的 Source/Sink 配对检测，不依赖 IFDS |
+
+**有界约束**：通过 `bounds.maxAbilitiesPerFlow`、`bounds.maxCallbackIterations`、`bounds.maxNavigationHops` 限制分析规模；Runner 将 `maxCallbackIterations` 传给 `LifecycleModelCreator`，影响 DummyMain 的 CFG 展开轮数。
+
+**详细技术说明、数据流图与入门示例**请见 **[taint/README.md](taint/README.md)**。
+
+---
+
+### 4.7 CLI 与 GUI
+
+- **CLI**：`cli/LifecycleAnalyzer` 提供一站式分析（生命周期 + 污点分析），`ReportGenerator` 支持 JSON/Text/HTML/Markdown 报告，`cli.ts` 为命令行入口。配置项与使用方式见 **[cli/README.md](cli/README.md)**。
+- **GUI**：基于 Node 的 HTTP 服务（`gui/server.ts`）提供 `/api/analyze`、`/api/report` 等接口，前端输入项目路径即可分析并导出报告。启动方式与 API 说明见 **[gui/README.md](gui/README.md)**。
+
+---
+
 ## 5. 完整流程解析
 
 ### 5.1 从代码到 DummyMain 的完整旅程
@@ -2417,23 +2446,65 @@ for (const component of components) {
 
 | 位置 | 功能 | 状态 | 说明 |
 |------|------|--------|------|
-| `taint/TaintFact.ts` | 污点数据结构 | ✅ 完成 | AccessPath + SourceContext + TaintFact，借鉴 FlowDroid |
-| `taint/SourceSinkManager.ts` | Source/Sink 规则管理 | ✅ 完成 | 86 条规则覆盖资源/闭包/内存三类泄漏 |
-| `taint/TaintAnalysisProblem.ts` | IFDS 问题定义 | ✅ 完成 | 继承 DataflowProblem，实现四种 FlowFunction |
-| `taint/TaintAnalysisSolver.ts` | IFDS 求解器 | ✅ 完成 | 继承 DataflowSolver，利用 CallGraph + CHA |
+| `taint/TaintFact.ts` | 污点数据结构 | ✅ 完成 | AccessPath + SourceContext + TaintFact + `visitedAbilities` + `navigationCount`，借鉴 FlowDroid |
+| `taint/SourceSinkManager.ts` | Source/Sink 规则管理 | ✅ 完成 | 86 条规则覆盖资源/闭包/内存三类泄漏；修复同 pattern 多条规则互相覆盖 Bug |
+| `taint/TaintAnalysisProblem.ts` | IFDS 问题定义 | ✅ 完成 | 继承 DataflowProblem；集成约束1（`checkAbilityBoundary`）和约束3（`isNavigationCall`） |
+| `taint/TaintAnalysisSolver.ts` | IFDS 求解器 | ✅ 完成 | 继承 DataflowSolver，利用 CallGraph + CHA；`maxCallbackIterations` 传递给 LifecycleModelCreator |
 | `taint/TaintAnalysisSolver.ts` | DummyMain 入口运行 | ✅ 完成 | runFromDummyMain() 以生命周期模型为入口 |
 | `taint/ResourceLeakDetector.ts` | 简化版方法内检测 | ✅ 完成 | 方法内 Source/Sink 配对检测 |
-| `cli/LifecycleAnalyzer.ts` | 集成 IFDS 分析 | ✅ 完成 | 一站式运行生命周期分析 + 污点分析 |
+| `cli/LifecycleAnalyzer.ts` | 集成 IFDS 分析 | ✅ 完成 | 一站式运行；新增 `bounds` 参数支持三条有界约束配置 |
+| `NavigationAnalyzer.ts` | NavPathStack 支持 | ✅ 完成 | 新增 pushPath/pushPathByName/replacePath/replacePathByName 解析 |
+| `LifecycleModelCreator.ts` | 约束2 循环展开 | ✅ 完成 | `maxCallbackIterations` 控制 CFG 循环展开次数，默认 1（DAG） |
 
 ### 8.2 待实现功能（可选扩展）
 
 | 位置 | 功能 | 优先级 | 说明 |
 |------|------|--------|------|
-| `taint/TaintAnalysisProblem.ts` | 有界化约束 | **高** | 逻辑组件/UI 事件/交互三种约束（项目核心创新点） |
-| `LifecycleModelCreator` | CFG stmtToBlock 映射 | ~~高~~ | ~~修复 DummyMain CFG 与 DataflowSolver 的兼容性~~ **已修复 (v2.0.1)** |
-| `NavigationAnalyzer` | NavPathStack 支持 | 中 | 支持 pushPath/pushPathByName 新 API |
+| ~~`taint/TaintAnalysisProblem.ts`~~ | ~~有界化约束~~ | ~~高~~ | ✅ **v2.1.0 已完成**（三条约束均已实现并接入流水线） |
+| ~~`LifecycleModelCreator`~~ | ~~CFG stmtToBlock 映射~~ | ~~高~~ | ✅ **v2.0.1 已修复** |
+| ~~`NavigationAnalyzer`~~ | ~~NavPathStack 支持~~ | ~~中~~ | ✅ **v2.1.0 已完成** |
 | `resolveCallbackMethod()` Lambda 增强 | Lambda 完整支持 | 低 | 完整解析内联 Lambda 表达式 |
 | ViewTree 增强 | 第三方 UI 框架支持 | 低 | 改进对 HdsNavigation 等组件的解析 |
+
+### 8.2b BoundsConfig 参数说明
+
+三条有界化约束可通过 `AnalysisOptions.bounds` 统一配置：
+
+```typescript
+import { LifecycleAnalyzer } from './cli/LifecycleAnalyzer';
+
+const analyzer = new LifecycleAnalyzer({
+    runTaintAnalysis: true,
+    bounds: {
+        // 约束1：单条数据流最多访问的 Ability 数量（默认 3）
+        // 超出时 checkAbilityBoundary 会 kill 该数据流
+        maxAbilitiesPerFlow: 3,
+
+        // 约束2：DummyMain CFG 中回调循环的最大展开次数（默认 1）
+        // =1 时 CFG 为 DAG，分析效率最高；值越大覆盖路径越多但代价越高
+        maxCallbackIterations: 1,
+
+        // 约束3：单条数据流最多经过的导航跳数（默认 5）
+        // 每经过 startAbility/pushUrl/pushPath 等调用时 navigationCount +1
+        // 超出时 isNavigationCall 会 kill 该数据流
+        maxNavigationHops: 5,
+    },
+});
+const result = await analyzer.analyze('/path/to/project');
+```
+
+也可以直接使用 `TaintAnalysisRunner` 进行精细控制：
+
+```typescript
+import { TaintAnalysisRunner } from './taint/TaintAnalysisSolver';
+
+const runner = new TaintAnalysisRunner(scene, {
+    maxAbilitiesPerFlow: 2,      // 约束1
+    maxCallbackIterations: 1,    // 约束2
+    maxNavigationHops: 3,        // 约束3
+});
+const result = runner.runFromDummyMain();
+```
 
 ### 8.3 扩展建议
 
@@ -2597,13 +2668,56 @@ if (result.success) {
 
 | 问题 | 严重程度 | 说明 |
 |------|:--------:|------|
-| ~~DummyMain CFG 与 DataflowSolver 不兼容~~ | ~~高~~ | **v2.0.1 已修复**。通过 `linkStmtsToCfg` 中追加 `cfg.updateStmt2BlockMap(block)` 解决 |
-| 有界化约束未实现 | **高** | 项目核心创新点（逻辑组件约束/UI 事件约束/交互约束）尚未实现 |
+| ~~DummyMain CFG 与 DataflowSolver 不兼容~~ | ~~高~~ | ✅ **v2.0.1 已修复**。通过 `linkStmtsToCfg` 中追加 `cfg.updateStmt2BlockMap(block)` 解决 |
+| ~~有界化约束未实现~~ | ~~高~~ | ✅ **v2.1.0 已完成**。三条约束全部实现并接入 CLI 流水线 |
+| ~~NavPathStack API~~ | ~~中~~ | ✅ **v2.1.0 已完成**。pushPath/pushPathByName/replacePath/replacePathByName 全部支持 |
+| ~~超泛化内存规则误报~~ | ~~高~~ | ✅ **v2.2.0 已修复**。删除 Map.set / Set.add / Array.push 规则，消除大规模 Source 误报 |
 | 第三方 UI 框架 | 低 | HdsNavigation 等组件无法解析 ViewTree |
-| NavPathStack API | 中 | pushPath/pushPathByName 未支持 |
+| 链式调用导航漏检 | 中 | `this.getUIContext().getRouter().pushUrl()` 链式调用，ArkAnalyzer IR 拆解后无法追踪 receiver 类型，OxHornCampus 等项目的导航漏检。需改 NavigationAnalyzer 的类型追溯逻辑，成本高，暂缓。 |
+| 跨方法 AVPlayer 泄漏漏检 | 中 | `media.createAVPlayer()` 与 `release()` 跨 3 层方法调用（createAvPlayer→release），IFDS 路径未能闭合。MultiVideo 的 AVPlayer 泄漏漏报属此类。 |
+| 静态命名空间 className 丢失 | 低 | ArkAnalyzer 对静态命名空间导入（如 `distributedDataObject.create()`）将 className 解析为空字符串，导致规则无法精确命中。DistributedMail 的分布式 API 漏报属此类。 |
+
+### E. v2.1.0 有界约束完整实现报告
+
+#### 新增/修复功能
+
+| 功能 | 文件 | 说明 |
+|------|------|------|
+| 约束1 Ability 数量限制 | `TaintAnalysisProblem.ts` | `checkAbilityBoundary` + `TaintFact.visitedAbilities` |
+| 约束2 CFG 循环展开 | `LifecycleModelCreator.ts` | `maxCallbackIterations` 控制 for 循环展开次数 |
+| 约束2 流水线接入 | `TaintAnalysisSolver.ts` + `LifecycleAnalyzer.ts` | 从 CLI 到 LifecycleModelCreator 的完整传递 |
+| 约束3 导航跳数限制 | `TaintAnalysisProblem.ts` | `isNavigationCall` + `TaintFact.navigationCount` |
+| NavPathStack 支持 | `NavigationAnalyzer.ts` | pushPath/pushPathByName/replacePath/replacePathByName |
+| SourceSinkManager Bug 修复 | `SourceSinkManager.ts` | 相同 pattern 多条规则不再互相覆盖（Map key 改为 id） |
+| bounds 参数 | `LifecycleAnalyzer.ts` | `AnalysisOptions.bounds` 透传三条约束参数 |
+| 测试断言强化 | `Demo4testsAnalysis.test.ts` | 有界/无界对比 + OxHornCampus 泄漏内容断言 |
+| 约束专项测试 | `TaintAnalysisIntegration.test.ts` | 约束1/2/3 专项截断效果验证 |
+
+---
+
+### F. v2.2.0 规则精度改进报告
+
+基于 7 个真实鸿蒙项目（RingtoneKit / UIDesignKit / CloudFoundation / OxHornCampus / DistributedMail / TransitionPerformanceIssue / MultiVideoApplication）的人工审查与自动分析对比，完成以下修复：
+
+#### 修复内容
+
+| 修复项 | 文件 | 效果 |
+|--------|------|------|
+| 删除 Map.set / Set.add / Array.push Source 规则及其配对 Sink（7条） | `SourceSinkManager.ts` | MultiVideo Source 86→0，OxHornCampus Source 9→3，TransitionBefore Source 7→1，误报率大幅降低 |
+| 新增分布式数据 API 规则：distributedDataObject.create / DataObject.on / DataObject.off | `SourceSinkManager.ts` | 为 DistributedMail 类分布式应用提供规则基础 |
+| 新增 display.on / display.off 规则 | `SourceSinkManager.ts` | 支持 MultiVideo 等项目的折叠屏事件泄漏检测 |
+| 导航分析扩展到 Component 类 | `Demo4testsAnalysis.test.ts` | UIDesignKit 导航 1→2，OxHornCampus 导航 0→2 |
+
+#### 已知局限（暂缓修复）
+
+| 局限 | 影响项目 | 说明 |
+|------|---------|------|
+| 链式调用导航漏检 | OxHornCampus（3处全漏） | `getUIContext().getRouter().pushUrl()` 需类型追溯，成本高 |
+| 跨方法 AVPlayer 泄漏漏检 | MultiVideoApplication | createAVPlayer→release 路径跨 3 层方法，IFDS 未闭合 |
+| 静态命名空间 className 丢失 | DistributedMail | ArkAnalyzer IR 对 `distributedDataObject.create()` 的 className 解析为空字符串 |
 
 ---
 
 > **作者**: AI Assistant & YiZhou
 > **创建日期**: 2025-01-17  
-> **最后更新**: 2025-03-01
+> **最后更新**: 2026-03-01

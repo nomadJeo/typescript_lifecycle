@@ -35,10 +35,8 @@ import {
     ComponentInfo,
     AbilityLifecycleStage,
     ComponentLifecycleStage,
-    AbilityNavigationTarget,
-    NavigationType,
 } from './LifecycleTypes';
-import { NavigationAnalyzer, NavigationAnalysisResult } from './NavigationAnalyzer';
+import { NavigationAnalyzer } from './NavigationAnalyzer';
 
 // ============================================================================
 // 常量定义
@@ -64,28 +62,6 @@ const COMPONENT_BASE_CLASSES: string[] = [
     'ViewPU',
 ];
 
-/**
- * Ability 生命周期方法名称
- */
-const ABILITY_LIFECYCLE_METHODS: string[] = [
-    'onCreate',
-    'onDestroy',
-    'onWindowStageCreate',
-    'onWindowStageDestroy',
-    'onForeground',
-    'onBackground',
-];
-
-/**
- * Component 生命周期方法名称
- */
-const COMPONENT_LIFECYCLE_METHODS: string[] = [
-    'aboutToAppear',
-    'aboutToDisappear',
-    'build',
-    'onPageShow',
-    'onPageHide',
-];
 
 // ============================================================================
 // AbilityCollector 类
@@ -594,7 +570,7 @@ export class AbilityCollector {
         const pageName = parts[parts.length - 1];
         
         // 在已收集的 Component 中查找
-        for (const [signature, component] of this.componentCache) {
+        for (const [, component] of this.componentCache) {
             // 匹配组件名
             if (component.name === pageName) {
                 return component;

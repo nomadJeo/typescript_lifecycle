@@ -32,8 +32,6 @@ import {
     LifecycleModelCreator,
     AbilityCollector,
     ViewTreeCallbackExtractor,
-    NavigationAnalyzer,
-    AbilityLifecycleStage,
     ComponentLifecycleStage,
 } from '../../../src/TEST_lifecycle';
 
@@ -183,7 +181,7 @@ describe('RingtoneKit_Codelab_Demo 项目分析', () => {
                 
                 for (const methodName of expectedMethods) {
                     let found = false;
-                    for (const [stage, method] of entryAbility.lifecycleMethods) {
+                    for (const [, method] of entryAbility.lifecycleMethods) {
                         if (method.getName() === methodName) {
                             found = true;
                             console.log(`  ✅ ${methodName}`);
@@ -263,14 +261,12 @@ describe('RingtoneKit_Codelab_Demo 项目分析', () => {
         it('4.1 应该提取到 onClick 和 onChange 回调', () => {
             console.log('\n----- UI 回调提取 -----');
             
-            let totalCallbacks = 0;
             const eventTypes = new Set<string>();
-            
+
             for (const arkClass of scene.getClasses()) {
                 const viewTree = arkClass.getViewTree();
                 if (viewTree && arkClass.getName() === 'Index') {
                     const callbacks = extractor.extractFromComponent(arkClass);
-                    totalCallbacks = callbacks.length;
                     
                     console.log(`\nIndex Component 回调提取结果:`);
                     console.log(`  回调总数: ${callbacks.length}`);

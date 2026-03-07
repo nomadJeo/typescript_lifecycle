@@ -97,6 +97,12 @@ const analyzer = new LifecycleAnalyzer({
     generateDummyMain: true,
     detectResourceLeaks: true,
     runTaintAnalysis: true,
+    // 有界约束（三条有界化约束均可调节）
+    bounds: {
+        maxCallbackIterations: 1,    // 约束2：DummyMain CFG 循环展开次数（默认 1 = DAG）
+        maxAbilitiesPerFlow: 3,      // 约束1：单条数据流最多访问的 Ability 数
+        maxNavigationHops: 5,        // 约束3：单条数据流最多经过的导航跳数
+    },
 });
 const result = await analyzer.analyze('/path/to/harmonyos/project');
 ```
@@ -111,7 +117,7 @@ const result = await analyzer.analyze('/path/to/harmonyos/project');
 |------|------|
 | `LifecycleTypes.ts` | 类型定义（Ability/Component 信息结构） |
 | `AbilityCollector.ts` | 收集所有 Ability 和 Component，识别入口 |
-| `NavigationAnalyzer.ts` | 路由分析（支持变量追踪和对象参数解析） |
+| `NavigationAnalyzer.ts` | 路由分析（支持 router/startAbility/NavPathStack 全覆盖） |
 | `ViewTreeCallbackExtractor.ts` | 从 ViewTree 提取 UI 回调 |
 | `LifecycleModelCreator.ts` | 核心构建器，生成 DummyMain |
 | `taint/TaintFact.ts` | 污点数据结构（AccessPath + SourceContext） |
@@ -198,10 +204,28 @@ flowchart LR
 - [x] LifecycleAnalyzer 一站式集成
 - [x] 4 个真实项目污点分析验证
 
-### 待完成
-- [ ] **有界化约束实现**（逻辑组件/UI 事件/交互约束 - 项目核心创新点）
+**v2.1.0 - 有界约束完整实现**
+- [x] **约束1（Ability 数量限制）**：`checkAbilityBoundary` + `TaintFact.visitedAbilities` 跨 Ability 数据流截断
+- [x] **约束2（UI 回调迭代次数）**：`LifecycleModelCreator` 循环展开 + `maxCallbackIterations` 全链路传递
+- [x] **约束3（导航跳转次数）**：`isNavigationCall` + `TaintFact.navigationCount` 截断导航数据流
+- [x] **NavPathStack 导航支持**：`pushPath` / `pushPathByName` / `replacePath` / `replacePathByName` 全覆盖
+- [x] **SourceSinkManager Bug 修复**：相同 pattern 多条规则不再互相覆盖（key 改为 id）
+- [x] **LifecycleAnalyzer.bounds 参数**：三条约束均可通过 `AnalysisOptions.bounds` 配置
+- [x] 提升测试断言强度（有界/无界对比 + 泄漏内容验证 + 约束专项测试）
+
+**v2.2.0 - 规则精度改进**
+- [x] **删除超泛化 Source 规则**：移除 Map.set / Set.add / Array.push（消除 MultiVideo +85、OxHornCampus +6、TransitionBefore +6 误报）
+- [x] **新增分布式 API 规则**：distributedDataObject.create / DataObject.on / DataObject.off
+- [x] **新增 display 事件规则**：display.on / display.off（折叠屏事件泄漏支持）
+- [x] **导航分析扩展到 Component**：Component 类中的 pushPath/pushPathByName 现已可被检测到
+
+### 待完成 / 已知局限
 - [x] ~~修复 DummyMain CFG 与 DataflowSolver 兼容性~~ (v2.0.1 已修复)
-- [ ] NavPathStack 导航支持
+- [x] ~~NavPathStack 导航支持~~ (v2.1.0 已完成)
+- [x] ~~有界化约束实现~~ (v2.1.0 已完成)
+- [ ] **链式调用导航漏检**：`getUIContext().getRouter().pushUrl()` 需类型追溯，OxHornCampus 等项目漏检
+- [ ] **跨方法资源泄漏漏检**：AVPlayer 跨 3 层方法追踪（MultiVideoApplication）
+- [ ] **静态命名空间 className 丢失**：ArkAnalyzer IR 对 `distributedDataObject.create()` 等静态调用 className 解析为空字符串
 - [ ] Lambda 完整支持
 
 ---
@@ -211,9 +235,9 @@ flowchart LR
 ### 测试结果
 
 ```
- Test Files  5 passed (5)
-      Tests  90 passed (90)
-   Duration  ~25s
+ Test Files  ~10 passed
+      Tests  260+ passed
+   Duration  ~30s (不含 Demo4tests 真实项目测试)
 ```
 
 ### 测试覆盖
@@ -231,6 +255,8 @@ flowchart LR
 | **L9 污点分析单元测试** | TaintFact, SourceSinkManager, TaintAnalysisProblem | ✅ |
 | **L10 污点分析集成测试** | TaintAnalysisSolver, TaintAnalysisRunner | ✅ |
 | **L11 真实项目污点分析** | 4 个项目 Scene/DummyMain/Source/Sink 验证 | ✅ |
+| **L12 有界/无界对比测试** | OxHornCampus 有界约束效果验证 + 泄漏内容断言 | ✅ |
+| **L13 约束专项测试** | 约束1/2/3 专项截断效果验证 | ✅ |
 
 ### 真实项目验证
 
@@ -264,6 +290,8 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
+| 2026-03-07 | v2.2.0 | **规则精度改进**：删除 Map.set/Set.add/Array.push 超泛化规则（消除 MultiVideo 85个误报）+ 新增分布式 API / display 事件规则 + 导航分析扩展到 Component 类 |
+| 2026-03-01 | v2.1.0 | **有界约束完整实现**：三条约束全链路接入 + NavPathStack 支持 + SourceSinkManager Bug 修复 + 测试断言强化 |
 | 2026-03-01 | v2.0.1 | **修复 DummyMain CFG 兼容性** + AccessPath 参数错位，四个真实项目 IFDS 完整通过（OxHornCampus 检出 1 资源泄漏） |
 | 2026-03-01 | v2.0.0 | **污点分析集成**：IFDS 求解器 + 86 条 Source/Sink 规则 + DummyMain 接入 + 4 个真实项目验证 |
 | 2025-03-01 | v1.0.0 | **生命周期建模**：4 个真实华为 Codelab 项目验证通过，JSON5 解析修复 |

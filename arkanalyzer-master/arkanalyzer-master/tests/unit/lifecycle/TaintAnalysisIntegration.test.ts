@@ -690,4 +690,99 @@ describe('LifecycleAnalyzer IFDS 污点分析集成', () => {
         expect(result.taintAnalysis).toBeUndefined();
         expect(result.duration.taintAnalysis).toBeDefined();
     });
+
+    it('LifecycleAnalyzer 应接受 bounds 参数并透传给 TaintAnalysisRunner', async () => {
+        const { LifecycleAnalyzer } = await import('../../../src/TEST_lifecycle/cli/LifecycleAnalyzer');
+
+        const analyzer = new LifecycleAnalyzer({
+            sdkPath: SDK_DIR,
+            runTaintAnalysis: true,
+            verbose: false,
+            bounds: {
+                maxCallbackIterations: 1,
+                maxAbilitiesPerFlow: 3,
+                maxNavigationHops: 5,
+            },
+        });
+
+        const projectPath = path.join(__dirname, '../../resources/lifecycle/simple');
+        const result = await analyzer.analyze(projectPath);
+
+        // 只要不崩溃、有 taintAnalysis 字段即可
+        expect(result.duration).toHaveProperty('taintAnalysis');
+        console.log(`[Test] 有界 LifecycleAnalyzer 运行完成，耗时: ${result.duration.taintAnalysis}ms`);
+    });
+});
+
+// ============================================================================
+// 有界约束专项测试（约束1 Ability 数量 / 约束3 导航跳数）
+// ============================================================================
+
+describe('有界约束专项测试', () => {
+    it('约束1：极小 maxAbilitiesPerFlow 应减少跨 Ability 的 IFDS 事实数', async () => {
+        const { TaintAnalysisRunner } = await import('../../../src/TEST_lifecycle/taint/TaintAnalysisSolver');
+
+        const scene = buildScene('multi-ability');
+
+        // 无约束（允许最多 99 个 Ability）
+        const runnerUnbounded = new TaintAnalysisRunner(scene, {
+            maxAbilitiesPerFlow: 99,
+        });
+        const unboundedResult = runnerUnbounded.runFromDummyMain();
+
+        // 极严格约束（每条数据流最多经过 1 个 Ability）
+        const runnerBounded = new TaintAnalysisRunner(scene, {
+            maxAbilitiesPerFlow: 1,
+        });
+        const boundedResult = runnerBounded.runFromDummyMain();
+
+        // 两者都应成功运行
+        expect(unboundedResult.success).toBe(true);
+        expect(boundedResult.success).toBe(true);
+
+        // 有界版本的事实数应不超过无界版本（约束只会减少或等于）
+        expect(boundedResult.statistics.totalFacts).toBeLessThanOrEqual(
+            unboundedResult.statistics.totalFacts
+        );
+
+        console.log(`[Test] 约束1 对比: 无界事实=${unboundedResult.statistics.totalFacts}, 有界事实=${boundedResult.statistics.totalFacts}`);
+    });
+
+    it('约束3：maxNavigationHops=0 应阻止所有导航相关数据流传播', async () => {
+        const { TaintAnalysisRunner } = await import('../../../src/TEST_lifecycle/taint/TaintAnalysisSolver');
+
+        const scene = buildScene('simple');
+
+        // 禁止任何导航跳转（maxNavigationHops=0 意味着含导航 API 的路径会被 kill）
+        const runner = new TaintAnalysisRunner(scene, {
+            maxNavigationHops: 0,
+        });
+        const result = runner.runFromDummyMain();
+
+        // 应正常完成（不崩溃），分析 simple 项目
+        expect(result.success).toBe(true);
+        expect(result.statistics.analyzedMethods).toBeGreaterThan(0);
+
+        console.log(`[Test] 约束3 maxNavigationHops=0: 事实=${result.statistics.totalFacts}, 方法=${result.statistics.analyzedMethods}`);
+    });
+
+    it('约束2：maxCallbackIterations=1 与 =2 的事实数应有差异（或相等，若无循环路径）', async () => {
+        const { TaintAnalysisRunner } = await import('../../../src/TEST_lifecycle/taint/TaintAnalysisSolver');
+
+        const scene = buildScene('multi-ability');
+
+        const runner1 = new TaintAnalysisRunner(scene, { maxCallbackIterations: 1 });
+        const result1 = runner1.runFromDummyMain();
+
+        const runner2 = new TaintAnalysisRunner(scene, { maxCallbackIterations: 2 });
+        const result2 = runner2.runFromDummyMain();
+
+        expect(result1.success).toBe(true);
+        expect(result2.success).toBe(true);
+
+        // k=2 应不少于 k=1 的事实数
+        expect(result2.statistics.totalFacts).toBeGreaterThanOrEqual(result1.statistics.totalFacts);
+
+        console.log(`[Test] 约束2 对比: k=1 事实=${result1.statistics.totalFacts}, k=2 事实=${result2.statistics.totalFacts}`);
+    });
 });

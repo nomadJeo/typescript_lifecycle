@@ -3,14 +3,11 @@
  * 目标：深入分析 ArkAnalyzer 如何处理 Lambda/箭头函数
  */
 
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, it, beforeAll } from 'vitest';
 import path from 'path';
 import { Scene, SceneConfig } from '../../../src/index';
 import { Sdk } from '../../../src/Config';
-import { 
-    ViewTreeCallbackExtractor,
-    AbilityCollector,
-} from '../../../src/TEST_lifecycle';
+import { ViewTreeCallbackExtractor } from '../../../src/TEST_lifecycle';
 
 const SDK_DIR = path.join(__dirname, '../../resources/Sdk');
 const sdk: Sdk = { name: '', path: SDK_DIR, moduleName: '' };

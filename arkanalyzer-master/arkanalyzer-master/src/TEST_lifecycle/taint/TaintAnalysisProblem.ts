@@ -25,7 +25,7 @@ import { Stmt, ArkAssignStmt, ArkInvokeStmt, ArkReturnStmt } from '../../core/ba
 import { ArkMethod } from '../../core/model/ArkMethod';
 import { Local } from '../../core/base/Local';
 import { Value } from '../../core/base/Value';
-import { ArkInstanceFieldRef, ArkStaticFieldRef } from '../../core/base/Ref';
+import { ArkInstanceFieldRef } from '../../core/base/Ref';
 import { ArkInstanceInvokeExpr, ArkStaticInvokeExpr, AbstractInvokeExpr } from '../../core/base/Expr';
 import { ClassType } from '../../core/base/Type';
 
@@ -125,6 +125,18 @@ export interface TaintAnalysisConfig {
     fieldSensitive?: boolean;
     /** 自定义 SourceSinkManager */
     sourceSinkManager?: SourceSinkManager;
+    /** Ability 生命周期方法到 Ability 名称的映射（由 LifecycleModelCreator.getAbilityMethodSet() 提供） */
+    abilityMethodMap?: Map<ArkMethod, string>;
+    /** 单条数据流最多访问的 Ability 数量（约束1） */
+    maxAbilitiesPerFlow?: number;
+    /** 单条数据流最多经过的导航跳数（约束3） */
+    maxNavigationHops?: number;
+    /**
+     * DummyMain CFG 生命周期回调序列的最大循环展开次数（约束2）
+     * 传递给 LifecycleModelCreator 的 bounds.maxCallbackIterations。
+     * 默认值 1：CFG 为 DAG，IFDS 单趟即可完成；值越大分析越全面但代价越高。
+     */
+    maxCallbackIterations?: number;
 }
 
 /**
@@ -151,8 +163,20 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
     /** 发现的污点泄漏 */
     private taintLeaks: TaintLeak[] = [];
     
-    /** 活跃的污点（用于资源泄漏检测） */
-    private activeTaints: Map<string, TaintFact> = new Map();
+    /**
+     * 活跃的污点（用于资源泄漏检测）
+     * key = Source 语句的对象引用（IStmt），保证跨赋值别名传播后仍能准确定位原始分配点
+     */
+    private activeTaints: Map<IStmt, TaintFact> = new Map();
+
+    /** Ability 生命周期方法到 Ability 名称的映射（用于约束1） */
+    private abilityMethodMap: Map<ArkMethod, string>;
+
+    /** 单条数据流最多访问的 Ability 数量（约束1） */
+    private maxAbilitiesPerFlow: number;
+
+    /** 单条数据流最多经过的导航跳数（约束3） */
+    private maxNavigationHops: number;
     
     constructor(
         entryPoint: Stmt,
@@ -164,14 +188,22 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
         this.entryPoint = entryPoint;
         this.entryMethod = entryMethod;
         this.sourceSinkManager = config?.sourceSinkManager ?? new SourceSinkManager();
-        
+
+        this.abilityMethodMap = config?.abilityMethodMap ?? new Map();
+        this.maxAbilitiesPerFlow = config?.maxAbilitiesPerFlow ?? 3;
+        this.maxNavigationHops = config?.maxNavigationHops ?? 5;
+
         this.config = {
             maxPropagationDepth: config?.maxPropagationDepth ?? 100,
             trackImplicitFlows: config?.trackImplicitFlows ?? false,
             fieldSensitive: config?.fieldSensitive ?? true,
             sourceSinkManager: this.sourceSinkManager,
+            abilityMethodMap: this.abilityMethodMap,
+            maxAbilitiesPerFlow: this.maxAbilitiesPerFlow,
+            maxNavigationHops: this.maxNavigationHops,
+            maxCallbackIterations: config?.maxCallbackIterations ?? 1,
         };
-        
+
         this.zeroFact = TaintFact.getZeroFact();
     }
     
@@ -235,9 +267,34 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                 
                 // 非零值：处理污点传播
                 if (srcStmt instanceof ArkAssignStmt) {
+                    // 约束3：检查 RHS 是否是导航调用
+                    // 覆盖 getCallToReturnFlowFunction 未处理的、不在 scene 中的外部导航 API
+                    const rightOp = srcStmt.getRightOp();
+                    if (problem.isInvokeExpr(rightOp) &&
+                        problem.isNavigationCall(rightOp as AbstractInvokeExpr)) {
+                        const navigated = dataFact.deriveAfterNavigation(srcStmt as IStmt);
+                        if (navigated.navigationCount > problem.maxNavigationHops) {
+                            return result; // 超出导航跳数限制，kill
+                        }
+                        return problem.handleAssignmentPropagation(srcStmt, navigated);
+                    }
                     return problem.handleAssignmentPropagation(srcStmt, dataFact);
                 }
-                
+
+                // 约束3：ArkInvokeStmt 的导航调用检测
+                // 覆盖 getCallToReturnFlowFunction 未处理的、不在 scene 中的外部导航 API
+                if (srcStmt instanceof ArkInvokeStmt) {
+                    const invokeExpr = srcStmt.getInvokeExpr();
+                    if (problem.isNavigationCall(invokeExpr)) {
+                        const navigated = dataFact.deriveAfterNavigation(srcStmt as IStmt);
+                        if (navigated.navigationCount > problem.maxNavigationHops) {
+                            return result; // 超出导航跳数限制，kill
+                        }
+                        result.add(navigated);
+                        return result;
+                    }
+                }
+
                 // 其他语句：保持污点不变
                 result.add(dataFact);
                 return result;
@@ -269,33 +326,40 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                     result.add(dataFact);
                     return result;
                 }
-                
+
+                // 约束1：Ability 边界检查
+                const boundedFact = problem.checkAbilityBoundary(dataFact, method, srcStmt as IStmt);
+                if (boundedFact === null) {
+                    // 超出 Ability 数量限制，杀死该数据流
+                    return result;
+                }
+
                 // 处理实例方法调用：this 指针的污点传播
                 if (invokeExpr instanceof ArkInstanceInvokeExpr) {
                     const base = invokeExpr.getBase();
-                    if (problem.matchesAccessPathBase(dataFact.accessPath, base)) {
+                    if (problem.matchesAccessPathBase(boundedFact.accessPath, base)) {
                         // 将 base 的污点映射到 this
                         const thisLocal = problem.getThisLocal(method);
                         if (thisLocal) {
-                            const newAp = dataFact.accessPath.replaceBase(thisLocal as ILocal);
-                            result.add(dataFact.deriveWithNewAccessPath(newAp));
+                            const newAp = boundedFact.accessPath.replaceBase(thisLocal as ILocal);
+                            result.add(boundedFact.deriveWithNewAccessPath(newAp, srcStmt as IStmt));
                         }
                     }
                 }
-                
+
                 // 处理参数传播
                 for (let i = 0; i < args.length && i < params.length; i++) {
                     const arg = args[i];
-                    if (problem.matchesAccessPathBase(dataFact.accessPath, arg)) {
+                    if (problem.matchesAccessPathBase(boundedFact.accessPath, arg)) {
                         // 获取形参的 Local
                         const paramLocal = problem.getParameterLocal(method, i);
                         if (paramLocal) {
-                            const newAp = dataFact.accessPath.replaceBase(paramLocal as ILocal);
-                            result.add(dataFact.deriveWithNewAccessPath(newAp));
+                            const newAp = boundedFact.accessPath.replaceBase(paramLocal as ILocal);
+                            result.add(boundedFact.deriveWithNewAccessPath(newAp, srcStmt as IStmt));
                         }
                     }
                 }
-                
+
                 return result;
             }
         })();
@@ -325,7 +389,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                         const leftOp = callStmt.getLeftOp();
                         if (leftOp instanceof Local) {
                             const newAp = dataFact.accessPath.replaceBase(leftOp as ILocal);
-                            result.add(dataFact.deriveWithNewAccessPath(newAp));
+                            result.add(dataFact.deriveWithNewAccessPath(newAp, srcStmt as IStmt));
                         }
                     }
                 }
@@ -371,19 +435,33 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                 if (srcStmt instanceof ArkInvokeStmt) {
                     problem.checkSink(srcStmt, dataFact);
                 }
-                
+
+                // 约束3：检查是否是导航调用
+                let propagatedFact = dataFact;
+                if (srcStmt instanceof ArkInvokeStmt) {
+                    const invokeExpr = srcStmt.getInvokeExpr();
+                    if (problem.isNavigationCall(invokeExpr)) {
+                        const navigated = dataFact.deriveAfterNavigation(srcStmt as IStmt);
+                        if (navigated.navigationCount > problem.maxNavigationHops) {
+                            // 超出导航跳数限制，杀死该数据流
+                            return result;
+                        }
+                        propagatedFact = navigated;
+                    }
+                }
+
                 // 默认保持污点（不被调用 kill 的部分）
-                result.add(dataFact);
-                
+                result.add(propagatedFact);
+
                 // 检查是否被赋值语句 kill
                 if (srcStmt instanceof ArkAssignStmt) {
                     const leftOp = srcStmt.getLeftOp();
-                    if (problem.matchesAccessPathBase(dataFact.accessPath, leftOp)) {
+                    if (problem.matchesAccessPathBase(propagatedFact.accessPath, leftOp)) {
                         // 被重新赋值，kill 原有污点
-                        result.delete(dataFact);
+                        result.delete(propagatedFact);
                     }
                 }
-                
+
                 return result;
             }
         })();
@@ -392,7 +470,56 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
     // ========================================================================
     // 辅助方法
     // ========================================================================
-    
+
+    /** HarmonyOS 路由/导航 API 方法名集合（约束3） */
+    private static readonly NAVIGATION_APIS = new Set([
+        'startAbility',
+        'pushUrl',
+        'replaceUrl',
+        // NavPathStack 系列（HarmonyOS 新版路由）
+        'pushPath',
+        'pushPathByName',
+        'replacePath',
+        'replacePathByName',
+        'back',
+    ]);
+
+    /**
+     * 约束1：检查 Ability 边界
+     *
+     * 当污点流传播进入一个新 Ability 的生命周期方法时，
+     * 增加该 Ability 到 visitedAbilities 集合。
+     * 若集合大小超过 maxAbilitiesPerFlow，则杀死该流（返回 null）。
+     */
+    private checkAbilityBoundary(fact: TaintFact, method: ArkMethod, stmt: IStmt): TaintFact | null {
+        const abilityName = this.abilityMethodMap.get(method);
+        if (!abilityName) {
+            // 非 Ability 生命周期方法，无需边界检查
+            return fact;
+        }
+
+        if (fact.visitedAbilities.has(abilityName)) {
+            // 已经在访问这个 Ability，不新增计数
+            return fact;
+        }
+
+        const derived = fact.deriveEnteringAbility(abilityName, stmt);
+        if (derived.visitedAbilities.size > this.maxAbilitiesPerFlow) {
+            // 超出 Ability 数量限制，杀死该数据流
+            return null;
+        }
+        return derived;
+    }
+
+    /**
+     * 约束3：检查调用是否是导航 API
+     */
+    private isNavigationCall(invokeExpr: AbstractInvokeExpr): boolean {
+        const methodName = invokeExpr.getMethodSignature()
+            .getMethodSubSignature().getMethodName();
+        return TaintAnalysisProblem.NAVIGATION_APIS.has(methodName);
+    }
+
     /**
      * 处理赋值语句中的 Source 检测
      */
@@ -412,9 +539,9 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                     const ap = new AccessPath(leftOp as ILocal, null, [], sourceDef.taintSubFields ?? false);
                     const taint = TaintFact.createFromSource(ap, sourceDef, stmt as IStmt);
                     result.add(taint);
-                    
-                    // 记录活跃污点
-                    this.activeTaints.set(taint.hashCode().toString(), taint);
+
+                    // 记录活跃污点：key = Source 语句对象引用，与后续变量名无关
+                    this.activeTaints.set(stmt as IStmt, taint);
                 }
             }
         }
@@ -447,7 +574,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
         if (this.matchesAccessPathBase(dataFact.accessPath, rightOp)) {
             if (leftOp instanceof Local) {
                 const newAp = dataFact.accessPath.replaceBase(leftOp as ILocal);
-                result.add(dataFact.deriveWithNewStmt(newAp, stmt as IStmt));
+                result.add(dataFact.deriveWithNewAccessPath(newAp, stmt as IStmt));
             } else if (leftOp instanceof ArkInstanceFieldRef) {
                 // x.f = tainted
                 const fieldRef = leftOp as ArkInstanceFieldRef;
@@ -457,7 +584,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                     [fieldRef.getFieldSignature() as IFieldSignature],
                     dataFact.accessPath.taintSubFields
                 );
-                result.add(dataFact.deriveWithNewStmt(newAp, stmt as IStmt));
+                result.add(dataFact.deriveWithNewAccessPath(newAp, stmt as IStmt));
             }
         }
         
@@ -471,19 +598,19 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                 // 检查字段是否匹配
                 if (this.config.fieldSensitive) {
                     const fieldSig = fieldRef.getFieldSignature();
-                    if (dataFact.accessPath.taintSubFields || 
+                    if (dataFact.accessPath.taintSubFields ||
                         this.matchesField(dataFact.accessPath, fieldSig as IFieldSignature)) {
                         if (leftOp instanceof Local) {
                             const newAp = dataFact.accessPath.appendField(fieldSig as IFieldSignature)
                                 .replaceBase(leftOp as ILocal);
-                            result.add(dataFact.deriveWithNewStmt(newAp, stmt as IStmt));
+                            result.add(dataFact.deriveWithNewAccessPath(newAp, stmt as IStmt));
                         }
                     }
                 } else {
                     // 非字段敏感：直接传播
                     if (leftOp instanceof Local) {
                         const newAp = new AccessPath(leftOp as ILocal, null, [], true);
-                        result.add(dataFact.deriveWithNewStmt(newAp, stmt as IStmt));
+                        result.add(dataFact.deriveWithNewAccessPath(newAp, stmt as IStmt));
                     }
                 }
             }
@@ -494,7 +621,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
         if (leftOp instanceof ArkInstanceFieldRef) {
             const fieldRef = leftOp as ArkInstanceFieldRef;
             const base = fieldRef.getBase();
-            
+
             if (this.matchesAccessPathBase(dataFact.accessPath, rightOp)) {
                 // 将污点传播到字段
                 const newAp = new AccessPath(
@@ -503,7 +630,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                     [fieldRef.getFieldSignature() as IFieldSignature],
                     dataFact.accessPath.taintSubFields
                 );
-                result.add(dataFact.deriveWithNewStmt(newAp, stmt as IStmt));
+                result.add(dataFact.deriveWithNewAccessPath(newAp, stmt as IStmt));
             }
         }
         
@@ -559,8 +686,11 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
         _sinkDef: unknown
     ): void {
         // 对于资源泄漏检测，到达 Sink 意味着资源被正确释放
-        // 从活跃污点中移除
-        this.activeTaints.delete(taint.hashCode().toString());
+        // 通过 sourceContext.stmt（原始分配语句引用）删除，而非当前 taint 的 hashCode
+        // 这样即使资源经过赋值别名（如 let p2 = p; p2.release()）也能正确匹配
+        if (taint.sourceContext) {
+            this.activeTaints.delete(taint.sourceContext.stmt);
+        }
     }
     
     /**

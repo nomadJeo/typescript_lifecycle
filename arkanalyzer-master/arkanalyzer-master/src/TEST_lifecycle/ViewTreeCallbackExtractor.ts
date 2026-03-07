@@ -29,9 +29,8 @@ import { Scene } from '../Scene';
 import { ArkClass } from '../core/model/ArkClass';
 import { ArkMethod } from '../core/model/ArkMethod';
 import { ArkField } from '../core/model/ArkField';
-import { ViewTree, ViewTreeNode } from '../core/graph/ViewTree';
+import { ViewTreeNode } from '../core/graph/ViewTree';
 import { MethodSignature } from '../core/model/ArkSignature';
-import { FunctionType } from '../core/base/Type';
 import { ArkInstanceFieldRef } from '../core/base/Ref';
 import { Constant } from '../core/base/Constant';
 import {

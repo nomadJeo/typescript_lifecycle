@@ -33,7 +33,6 @@ import {
     LifecycleModelCreator,
     AbilityCollector,
     ViewTreeCallbackExtractor,
-    NavigationAnalyzer,
 } from '../../../src/TEST_lifecycle';
 
 // ============================================================================
@@ -273,7 +272,6 @@ describe('CloudFoundationKit_Codelab_Prefetch_ArkTS 项目分析', () => {
         it('5.1 应该从各 Component 提取 onClick 回调', () => {
             console.log('\n----- UI 回调提取 -----');
             
-            const components = collector.collectAllComponents();
             let totalCallbacks = 0;
             const callbacksByComponent = new Map<string, number>();
             const eventTypeSummary = new Map<string, number>();

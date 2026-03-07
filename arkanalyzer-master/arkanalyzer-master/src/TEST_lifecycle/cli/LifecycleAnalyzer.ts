@@ -29,9 +29,10 @@ import { NavigationAnalyzer } from '../NavigationAnalyzer';
 import {
     AbilityInfo,
     ComponentInfo,
+    BoundsConfig,
 } from '../LifecycleTypes';
 import { ResourceLeakDetector, ResourceLeakReport } from '../taint/ResourceLeakDetector';
-import { TaintAnalysisRunner, TaintAnalysisResult } from '../taint/TaintAnalysisSolver';
+import { TaintAnalysisRunner } from '../taint/TaintAnalysisSolver';
 import { TaintLeak, ResourceLeak } from '../taint/TaintAnalysisProblem';
 
 // ============================================================================
@@ -58,6 +59,13 @@ export interface AnalysisOptions {
     runTaintAnalysis?: boolean;
     /** 是否输出详细日志 */
     verbose?: boolean;
+    /**
+     * 有界约束配置（控制三条有界化约束的参数）
+     * - maxCallbackIterations：约束2，DummyMain CFG 循环展开次数，默认 1（DAG，推荐）
+     * - maxAbilitiesPerFlow：约束1，单条数据流最多访问的 Ability 数量，默认 3
+     * - maxNavigationHops：约束3，单条数据流最多经过的导航跳数，默认 5
+     */
+    bounds?: Partial<BoundsConfig>;
 }
 
 /**
@@ -449,7 +457,18 @@ export class LifecycleAnalyzer {
         
         if (this.options.runTaintAnalysis) {
             try {
-                const runner = new TaintAnalysisRunner(scene);
+                const taintConfig = {
+                    ...(this.options.bounds?.maxCallbackIterations !== undefined
+                        ? { maxCallbackIterations: this.options.bounds.maxCallbackIterations }
+                        : {}),
+                    ...(this.options.bounds?.maxAbilitiesPerFlow !== undefined
+                        ? { maxAbilitiesPerFlow: this.options.bounds.maxAbilitiesPerFlow }
+                        : {}),
+                    ...(this.options.bounds?.maxNavigationHops !== undefined
+                        ? { maxNavigationHops: this.options.bounds.maxNavigationHops }
+                        : {}),
+                };
+                const runner = new TaintAnalysisRunner(scene, Object.keys(taintConfig).length > 0 ? taintConfig : undefined);
                 const taintResult = runner.runFromDummyMain();
                 
                 if (taintResult.success) {

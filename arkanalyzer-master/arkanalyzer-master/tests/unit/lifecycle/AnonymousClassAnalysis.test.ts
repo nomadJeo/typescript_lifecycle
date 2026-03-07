@@ -89,7 +89,7 @@ describe('匿名类结构分析', () => {
             }
             
             // 检查静态初始化
-            const staticInit = arkClass.getStaticInitializer();
+            const staticInit = arkClass.getStaticInitMethod();
             if (staticInit) {
                 console.log('  静态初始化:');
                 const cfg = staticInit.getCfg();

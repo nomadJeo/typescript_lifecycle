@@ -19,8 +19,10 @@
  * 
  * 本模块负责分析代码中的页面跳转关系，包括：
  * - windowStage.loadContent() - Ability 加载初始页面
- * - router.pushUrl() / router.replaceUrl() - 页面间跳转
+ * - router.pushUrl() / router.replaceUrl() - 旧版页面间跳转
  * - startAbility() - Ability 间跳转
+ * - NavPathStack.pushPath() / replacePath() - 新版路由（传 NavPathInfo 对象）
+ * - NavPathStack.pushPathByName() / replacePathByName() - 新版路由（传字符串页面名）
  * 
  * ┌─────────────────────────────────────────────────────────────────┐
  * │                      路由分析工作流程                            │
@@ -46,10 +48,9 @@
 import { Scene } from '../Scene';
 import { ArkClass } from '../core/model/ArkClass';
 import { ArkMethod } from '../core/model/ArkMethod';
-import { Stmt, ArkAssignStmt, ArkInvokeStmt } from '../core/base/Stmt';
-import { AbstractInvokeExpr, ArkInstanceInvokeExpr, ArkNewExpr } from '../core/base/Expr';
+import { Stmt, ArkAssignStmt } from '../core/base/Stmt';
+import { AbstractInvokeExpr, ArkNewExpr } from '../core/base/Expr';
 import { Constant } from '../core/base/Constant';
-import { Value } from '../core/base/Value';
 import { Local } from '../core/base/Local';
 import { StringType, ClassType } from '../core/base/Type';
 import { ArkInstanceFieldRef } from '../core/base/Ref';
@@ -77,6 +78,14 @@ const NAVIGATION_METHOD_NAMES = {
     BACK: 'back',
     /** context.startAbility - 启动新 Ability */
     START_ABILITY: 'startAbility',
+    /** NavPathStack.pushPath(info: NavPathInfo) - 新版路由 */
+    PUSH_PATH: 'pushPath',
+    /** NavPathStack.pushPathByName(name, param) - 按页面名跳转 */
+    PUSH_PATH_BY_NAME: 'pushPathByName',
+    /** NavPathStack.replacePath(info: NavPathInfo) - 替换当前路由 */
+    REPLACE_PATH: 'replacePath',
+    /** NavPathStack.replacePathByName(name, param) */
+    REPLACE_PATH_BY_NAME: 'replacePathByName',
 };
 
 /**
@@ -171,7 +180,7 @@ export class NavigationAnalyzer {
      * @param result 分析结果（会被修改），如果不提供则创建新的
      * @returns 分析结果中的导航目标数组
      */
-    public analyzeMethod(method: ArkMethod, result?: NavigationAnalysisResult): NavigationTarget[] {
+    public analyzeMethod(method: ArkMethod, result?: NavigationAnalysisResult): AbilityNavigationTarget[] {
         // 如果没有提供 result，创建一个默认的
         const analysisResult: NavigationAnalysisResult = result || {
             initialPage: null,
@@ -235,6 +244,15 @@ export class NavigationAnalyzer {
                 break;
             case NAVIGATION_METHOD_NAMES.BACK:
                 this.handleRouterBack(invokeExpr, sourceMethod, result);
+                break;
+            // NavPathStack 系列（HarmonyOS 新版路由）
+            case NAVIGATION_METHOD_NAMES.PUSH_PATH:
+            case NAVIGATION_METHOD_NAMES.REPLACE_PATH:
+                this.handleNavPathStackWithInfo(invokeExpr, sourceMethod, result, methodName);
+                break;
+            case NAVIGATION_METHOD_NAMES.PUSH_PATH_BY_NAME:
+            case NAVIGATION_METHOD_NAMES.REPLACE_PATH_BY_NAME:
+                this.handleNavPathStackByName(invokeExpr, sourceMethod, result, methodName);
                 break;
         }
     }
@@ -374,9 +392,182 @@ export class NavigationAnalyzer {
     }
 
     /**
+     * 处理 NavPathStack.pushPath(info) / NavPathStack.replacePath(info)
+     * 
+     * `info` 是 NavPathInfo 对象，其 `name` 字段为目标页面名称：
+     * ```typescript
+     * this.pageStack.pushPath({ name: 'PageTwo' });
+     * ```
+     * 
+     * ArkAnalyzer 会将对象字面量转换为匿名类，需要从 `name` 字段中提取目标页面名。
+     */
+    private handleNavPathStackWithInfo(
+        invokeExpr: AbstractInvokeExpr,
+        sourceMethod: ArkMethod,
+        result: NavigationAnalysisResult,
+        methodName: string
+    ): void {
+        const targetName = this.extractNavPathInfoName(invokeExpr);
+        const navType = methodName === NAVIGATION_METHOD_NAMES.REPLACE_PATH
+            ? NavigationType.ROUTER_REPLACE
+            : NavigationType.ROUTER_PUSH;
+
+        if (targetName) {
+            result.navigationTargets.push({
+                targetAbilityName: targetName,
+                targetSignature: undefined,
+                sourceMethod,
+                navigationType: navType,
+            });
+            console.log(`[NavigationAnalyzer] Found NavPathStack.${methodName}: ${targetName}`);
+        } else {
+            result.warnings.push(
+                `无法解析 NavPathStack.${methodName} 的目标页面 (${sourceMethod.getName()})`
+            );
+        }
+    }
+
+    /**
+     * 处理 NavPathStack.pushPathByName(name, param) / replacePathByName(name, param)
+     * 
+     * 第一个参数直接是目标页面名称字符串：
+     * ```typescript
+     * this.pageStack.pushPathByName('PageTwo', { key: 'value' });
+     * ```
+     */
+    private handleNavPathStackByName(
+        invokeExpr: AbstractInvokeExpr,
+        sourceMethod: ArkMethod,
+        result: NavigationAnalysisResult,
+        methodName: string
+    ): void {
+        // 第一个参数是目标页面名称（字符串）
+        const targetName = this.extractStringArg(invokeExpr, 0);
+        const navType = methodName === NAVIGATION_METHOD_NAMES.REPLACE_PATH_BY_NAME
+            ? NavigationType.ROUTER_REPLACE
+            : NavigationType.ROUTER_PUSH;
+
+        if (targetName) {
+            result.navigationTargets.push({
+                targetAbilityName: targetName,
+                targetSignature: undefined,
+                sourceMethod,
+                navigationType: navType,
+            });
+            console.log(`[NavigationAnalyzer] Found NavPathStack.${methodName}: ${targetName}`);
+        } else {
+            result.warnings.push(
+                `无法解析 NavPathStack.${methodName} 的目标页面名 (${sourceMethod.getName()})`
+            );
+        }
+    }
+
+    /**
+     * 从 NavPathInfo 对象（pushPath 的参数）中提取 `name` 字段
+     *
+     * NavPathInfo 结构：`{ name: 'PageTwo', param?: any, ... }`
+     * ArkAnalyzer 通常将字面量对象转换为匿名类，`name` 字段存储在匿名类中。
+     */
+    private extractNavPathInfoName(invokeExpr: AbstractInvokeExpr): string | null {
+        const args = invokeExpr.getArgs();
+        if (args.length === 0) return null;
+
+        const firstArg = args[0];
+
+        // 情况1: 直接是字符串（简化情况，通常不存在）
+        if (firstArg instanceof Constant && firstArg.getType() instanceof StringType) {
+            return firstArg.getValue();
+        }
+
+        // 情况2: Local 变量（NavPathInfo 对象）
+        if (firstArg instanceof Local) {
+            // 先尝试字段赋值查找 name
+            const nameFromField = this.findFieldAssignment(firstArg, 'name');
+            if (nameFromField) return nameFromField;
+
+            // 再尝试从对象初始化查找 name
+            const nameFromInit = this.findFieldValueInInit(firstArg, 'name');
+            if (nameFromInit) return nameFromInit;
+
+            // 最后尝试从匿名类查找 name 字段
+            const declaringStmt = firstArg.getDeclaringStmt();
+            if (declaringStmt instanceof ArkAssignStmt) {
+                const rightOp = declaringStmt.getRightOp();
+                if (rightOp instanceof ArkNewExpr) {
+                    const classType = rightOp.getClassType();
+                    if (classType) {
+                        return this.extractFieldFromAnonymousClass(classType, 'name');
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 从对象初始化过程中查找指定字段的字符串值（通用版，字段名可指定）
+     */
+    private findFieldValueInInit(local: Local, fieldName: string): string | null {
+        const declaringStmt = local.getDeclaringStmt();
+        if (!declaringStmt || !(declaringStmt instanceof ArkAssignStmt)) return null;
+
+        const cfg = declaringStmt.getCfg();
+        if (!cfg) return null;
+
+        let foundDeclaring = false;
+        for (const block of cfg.getBlocks()) {
+            for (const stmt of block.getStmts()) {
+                if (stmt === declaringStmt) {
+                    foundDeclaring = true;
+                    continue;
+                }
+                if (foundDeclaring && stmt instanceof ArkAssignStmt) {
+                    const leftOp = stmt.getLeftOp();
+                    if (leftOp instanceof ArkInstanceFieldRef) {
+                        const base = leftOp.getBase();
+                        if (base.getName() === local.getName() && leftOp.getFieldName() === fieldName) {
+                            const rightOp = stmt.getRightOp();
+                            if (rightOp instanceof Constant && rightOp.getType() instanceof StringType) {
+                                return rightOp.getValue();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 从匿名类中提取指定字段的字符串常量值（通用版，字段名可指定）
+     */
+    private extractFieldFromAnonymousClass(classType: ClassType, fieldName: string): string | null {
+        const arkClass = this.scene.getClass(classType.getClassSignature());
+        if (!arkClass) return null;
+
+        for (const field of arkClass.getFields()) {
+            if (field.getName() === fieldName) {
+                const initializer = field.getInitializer();
+                if (initializer instanceof ArkAssignStmt) {
+                    const rightOp = initializer.getRightOp();
+                    if (rightOp instanceof Constant && rightOp.getType() instanceof StringType) {
+                        return rightOp.getValue();
+                    }
+                    // 尝试从字符串中匹配
+                    const initStr = initializer.toString();
+                    const match = initStr.match(/=\s*'([^']+)'/);
+                    if (match) return match[1];
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * 处理 context.startAbility(want)
      * 
-     * 代码示例：
+     * Want 对象结构：
      * ```typescript
      * let want: Want = {
      *     bundleName: 'com.example.app',

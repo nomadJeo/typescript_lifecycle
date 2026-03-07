@@ -465,8 +465,157 @@ describe('TaintFact', () => {
         it('零值应该有特殊表示', () => {
             const zero = TaintFact.getZeroFact();
             const str = zero.toString();
-            
+
             expect(str).toContain('ZERO');
+        });
+    });
+
+    // ========================================================================
+    // 有界分析约束（Phase 2/3 新增字段）
+    // ========================================================================
+
+    describe('有界分析约束', () => {
+        let ap: AccessPath;
+        let mockStmt: any;
+        let mockStmt2: any;
+
+        beforeEach(() => {
+            ap = new AccessPath(localResource);
+            mockStmt = createMockStmt(10);
+            mockStmt2 = createMockStmt(20);
+        });
+
+        describe('visitedAbilities', () => {
+            it('新创建的污点应该有空的 visitedAbilities', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                expect(fact.visitedAbilities.size).toBe(0);
+            });
+
+            it('deriveEnteringAbility 应该添加 Ability 名称到集合', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const derived = fact.deriveEnteringAbility('EntryAbility', mockStmt);
+                expect(derived.visitedAbilities.size).toBe(1);
+                expect(derived.visitedAbilities.has('EntryAbility')).toBe(true);
+            });
+
+            it('再次进入同一 Ability 不应该增加集合大小', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const derived1 = fact.deriveEnteringAbility('EntryAbility', mockStmt);
+                const derived2 = derived1.deriveEnteringAbility('EntryAbility', mockStmt2);
+                expect(derived2.visitedAbilities.size).toBe(1);
+            });
+
+            it('进入不同 Ability 应该分别记录', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const derived = fact
+                    .deriveEnteringAbility('AbilityA', mockStmt)
+                    .deriveEnteringAbility('AbilityB', mockStmt2);
+                expect(derived.visitedAbilities.size).toBe(2);
+                expect(derived.visitedAbilities.has('AbilityA')).toBe(true);
+                expect(derived.visitedAbilities.has('AbilityB')).toBe(true);
+            });
+
+            it('deriveEnteringAbility 不应该改变 navigationCount', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const derived = fact.deriveEnteringAbility('EntryAbility', mockStmt);
+                expect(derived.navigationCount).toBe(0);
+            });
+        });
+
+        describe('navigationCount', () => {
+            it('新创建的污点应该有 navigationCount=0', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                expect(fact.navigationCount).toBe(0);
+            });
+
+            it('deriveAfterNavigation 应该递增 navigationCount', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const derived = fact.deriveAfterNavigation(mockStmt2);
+                expect(derived.navigationCount).toBe(1);
+            });
+
+            it('多次导航应该正确累计 navigationCount', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const hop3 = fact
+                    .deriveAfterNavigation(mockStmt)
+                    .deriveAfterNavigation(mockStmt)
+                    .deriveAfterNavigation(mockStmt2);
+                expect(hop3.navigationCount).toBe(3);
+            });
+
+            it('deriveAfterNavigation 不应该改变 visitedAbilities', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const withAbility = fact.deriveEnteringAbility('AbilityA', mockStmt);
+                const afterNav = withAbility.deriveAfterNavigation(mockStmt2);
+                expect(afterNav.visitedAbilities.size).toBe(1);
+                expect(afterNav.visitedAbilities.has('AbilityA')).toBe(true);
+            });
+        });
+
+        describe('equals() 包含有界约束字段', () => {
+            it('不同 visitedAbilities 的污点应该不相等', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const withA = fact.deriveEnteringAbility('AbilityA', mockStmt);
+                const withB = fact.deriveEnteringAbility('AbilityB', mockStmt);
+                expect(withA.equals(withB)).toBe(false);
+            });
+
+            it('不同 navigationCount 的污点应该不相等', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const nav1 = fact.deriveAfterNavigation(mockStmt);
+                expect(fact.equals(nav1)).toBe(false);
+            });
+
+            it('相同有界约束字段的污点应该相等', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const nav1 = fact.deriveAfterNavigation(mockStmt);
+                const nav2 = fact.deriveAfterNavigation(mockStmt);
+                expect(nav1.equals(nav2)).toBe(true);
+            });
+        });
+
+        describe('派生方法保留有界约束字段', () => {
+            it('deriveWithNewStmt 应该保留 visitedAbilities 和 navigationCount', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const withBoth = fact
+                    .deriveEnteringAbility('AbilityA', mockStmt)
+                    .deriveAfterNavigation(mockStmt);
+                const derived = withBoth.deriveWithNewStmt(mockStmt2);
+                expect(derived.visitedAbilities.has('AbilityA')).toBe(true);
+                expect(derived.navigationCount).toBe(1);
+            });
+
+            it('deriveWithNewAccessPath 应该保留 visitedAbilities 和 navigationCount', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const withBoth = fact
+                    .deriveEnteringAbility('AbilityA', mockStmt)
+                    .deriveAfterNavigation(mockStmt);
+                const newLocal = createMockLocal('newRes');
+                const derived = withBoth.deriveWithNewAccessPath(new AccessPath(newLocal), mockStmt2);
+                expect(derived.visitedAbilities.has('AbilityA')).toBe(true);
+                expect(derived.navigationCount).toBe(1);
+            });
+        });
+
+        describe('toString() 包含有界约束信息', () => {
+            it('有导航跳数时应该显示 nav=N', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const nav = fact.deriveAfterNavigation(mockStmt);
+                expect(nav.toString()).toContain('nav=1');
+            });
+
+            it('有访问 Ability 时应该显示 abilities=...', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const withAbility = fact.deriveEnteringAbility('EntryAbility', mockStmt);
+                expect(withAbility.toString()).toContain('abilities=EntryAbility');
+            });
+
+            it('无导航和 Ability 时不应该显示额外信息', () => {
+                const fact = TaintFact.createFromSource(ap, sourceDefinition, mockStmt);
+                const str = fact.toString();
+                expect(str).not.toContain('nav=');
+                expect(str).not.toContain('abilities=');
+            });
         });
     });
 });

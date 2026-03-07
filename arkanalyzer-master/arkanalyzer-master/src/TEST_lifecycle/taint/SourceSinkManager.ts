@@ -50,17 +50,23 @@ export interface MethodCallInfo {
  * 负责管理和匹配 HarmonyOS 资源 API 的 Source/Sink 规则
  */
 export class SourceSinkManager {
-    /** Source 规则映射：方法模式 -> Source 定义 */
+    /**
+     * Source 规则映射：规则 ID -> Source 定义
+     * 使用 id 作 key 而非 methodPattern，确保同一 pattern 的多条规则（如 resource 与 memory 两类）
+     * 不会互相覆盖。
+     */
     private sources: Map<string, SourceDefinition> = new Map();
-    
-    /** Sink 规则映射：方法模式 -> Sink 定义 */
+
+    /**
+     * Sink 规则映射：规则 ID -> Sink 定义
+     */
     private sinks: Map<string, SinkDefinition> = new Map();
-    
-    /** Source ID 索引 */
-    private sourceById: Map<string, SourceDefinition> = new Map();
-    
-    /** Sink ID 索引 */
-    private sinkById: Map<string, SinkDefinition> = new Map();
+
+    /** Source ID 索引（与 sources 共用同一 Map，保留此别名以向后兼容） */
+    private get sourceById(): Map<string, SourceDefinition> { return this.sources; }
+
+    /** Sink ID 索引（与 sinks 共用同一 Map，保留此别名以向后兼容） */
+    private get sinkById(): Map<string, SinkDefinition> { return this.sinks; }
     
     /** 是否已加载默认规则 */
     private defaultRulesLoaded: boolean = false;
@@ -78,16 +84,14 @@ export class SourceSinkManager {
      * 注册 Source 规则
      */
     registerSource(source: SourceDefinition): void {
-        this.sources.set(source.methodPattern, source);
-        this.sourceById.set(source.id, source);
+        this.sources.set(source.id, source);
     }
-    
+
     /**
      * 注册 Sink 规则
      */
     registerSink(sink: SinkDefinition): void {
-        this.sinks.set(sink.methodPattern, sink);
-        this.sinkById.set(sink.id, sink);
+        this.sinks.set(sink.id, sink);
     }
     
     /**
@@ -116,46 +120,46 @@ export class SourceSinkManager {
      * 判断方法调用是否是 Source
      */
     isSource(callInfo: MethodCallInfo): SourceDefinition | null {
-        // 尝试多种匹配模式
+        // 生成调用的所有候选 pattern 字符串，用于精确 O(1) 查找
         const patterns = this.generateMatchPatterns(callInfo);
-        
-        for (const pattern of patterns) {
-            const source = this.sources.get(pattern);
-            if (source) {
+        const patternSet = new Set(patterns);
+
+        // 遍历所有已注册 Source，先尝试精确 pattern 命中
+        for (const source of this.sources.values()) {
+            if (patternSet.has(source.methodPattern)) {
                 return source;
             }
         }
-        
-        // 尝试通配符匹配
-        for (const [methodPattern, source] of this.sources) {
-            if (this.matchesPattern(callInfo, methodPattern)) {
+
+        // 再尝试通配符匹配
+        for (const source of this.sources.values()) {
+            if (this.matchesPattern(callInfo, source.methodPattern)) {
                 return source;
             }
         }
-        
+
         return null;
     }
-    
+
     /**
      * 判断方法调用是否是 Sink
      */
     isSink(callInfo: MethodCallInfo): SinkDefinition | null {
         const patterns = this.generateMatchPatterns(callInfo);
-        
-        for (const pattern of patterns) {
-            const sink = this.sinks.get(pattern);
-            if (sink) {
+        const patternSet = new Set(patterns);
+
+        for (const sink of this.sinks.values()) {
+            if (patternSet.has(sink.methodPattern)) {
                 return sink;
             }
         }
-        
-        // 尝试通配符匹配
-        for (const [methodPattern, sink] of this.sinks) {
-            if (this.matchesPattern(callInfo, methodPattern)) {
+
+        for (const sink of this.sinks.values()) {
+            if (this.matchesPattern(callInfo, sink.methodPattern)) {
                 return sink;
             }
         }
-        
+
         return null;
     }
     
@@ -801,39 +805,6 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
     },
     
     // ========================================================================
-    // 内存泄漏 - 缓存/存储引用
-    // ========================================================================
-    {
-        id: 'Map.set',
-        methodPattern: 'Map.set',
-        category: 'memory',
-        resourceType: 'MapEntry',
-        returnTainted: false,
-        taintedParamIndices: [1],
-        pairedSinkId: 'Map.delete',
-        description: 'Map 存储值（不删除则持续占用内存）',
-    },
-    {
-        id: 'Set.add',
-        methodPattern: 'Set.add',
-        category: 'memory',
-        resourceType: 'SetEntry',
-        returnTainted: false,
-        taintedParamIndices: [0],
-        pairedSinkId: 'Set.delete',
-        description: 'Set 存储值',
-    },
-    {
-        id: 'Array.push',
-        methodPattern: 'Array.push',
-        category: 'memory',
-        resourceType: 'ArrayElement',
-        returnTainted: false,
-        taintedParamIndices: [0],
-        description: '数组追加元素（无限增长则泄漏）',
-    },
-    
-    // ========================================================================
     // 内存泄漏 - Worker 线程
     // ========================================================================
     {
@@ -855,6 +826,47 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
         taintedParamIndices: [],
         pairedSinkId: 'ThreadWorker.terminate',
         description: '创建 ThreadWorker（鸿蒙线程 Worker）',
+    },
+
+    // ========================================================================
+    // 分布式数据对象（@kit.ArkData / distributedDataObject）
+    // 注意：ArkAnalyzer 对静态命名空间导入（如 distributedDataObject.create()）
+    // 可能将 className 解析为空字符串，导致 "distributedDataObject.create" 模式无法命中。
+    // 作为补充，使用 "DataObject.on" 匹配实例方法（className 通常可正确解析）。
+    // ========================================================================
+    {
+        id: 'distributedDataObject.create',
+        methodPattern: 'distributedDataObject.create',
+        category: 'resource',
+        resourceType: 'DistributedDataObject',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'DataObject.off',
+        description: '创建分布式数据对象（需在销毁前调用 off 解注册监听器）',
+    },
+    {
+        id: 'DataObject.on',
+        methodPattern: 'DataObject.on',
+        category: 'closure',
+        resourceType: 'DistributedDataObjectListener',
+        returnTainted: false,
+        taintedParamIndices: [],
+        pairedSinkId: 'DataObject.off',
+        description: '注册分布式数据对象事件监听（DataObject 不再使用时需 off）',
+    },
+
+    // ========================================================================
+    // 显示/折叠屏事件监听（@kit.ArkUI / display）
+    // ========================================================================
+    {
+        id: 'display.on',
+        methodPattern: 'display.on',
+        category: 'closure',
+        resourceType: 'DisplayCallback',
+        returnTainted: false,
+        taintedParamIndices: [],
+        pairedSinkId: 'display.off',
+        description: '注册 display 模块事件监听（如 foldStatusChange），需在组件销毁时 off',
     },
 ];
 
@@ -1246,43 +1258,31 @@ const HARMONYOS_SINKS: SinkDefinition[] = [
         pairedSourceId: 'worker.ThreadWorker',
         description: '终止 ThreadWorker',
     },
-    
+
     // ========================================================================
-    // 内存泄漏释放 - 集合清理
+    // 分布式数据对象释放
     // ========================================================================
     {
-        id: 'Map.delete',
-        methodPattern: 'Map.delete',
-        category: 'memory_release',
-        requiredTaintedParamIndices: [0],
-        requireTaintedThis: false,
-        pairedSourceId: 'Map.set',
-        description: '从 Map 中删除条目',
-    },
-    {
-        id: 'Map.clear',
-        methodPattern: 'Map.clear',
-        category: 'memory_release',
+        id: 'DataObject.off',
+        methodPattern: 'DataObject.off',
+        category: 'closure_release',
         requiredTaintedParamIndices: [],
-        requireTaintedThis: true,
-        description: '清空 Map',
-    },
-    {
-        id: 'Set.delete',
-        methodPattern: 'Set.delete',
-        category: 'memory_release',
-        requiredTaintedParamIndices: [0],
         requireTaintedThis: false,
-        pairedSourceId: 'Set.add',
-        description: '从 Set 中删除元素',
+        pairedSourceId: 'DataObject.on',
+        description: '解注册分布式数据对象事件监听器',
     },
+
+    // ========================================================================
+    // 显示/折叠屏事件监听释放
+    // ========================================================================
     {
-        id: 'Set.clear',
-        methodPattern: 'Set.clear',
-        category: 'memory_release',
+        id: 'display.off',
+        methodPattern: 'display.off',
+        category: 'closure_release',
         requiredTaintedParamIndices: [],
-        requireTaintedThis: true,
-        description: '清空 Set',
+        requireTaintedThis: false,
+        pairedSourceId: 'display.on',
+        description: '解注册 display 模块事件监听（如 foldStatusChange）',
     },
 ];
 

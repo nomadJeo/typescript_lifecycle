@@ -33,9 +33,6 @@ import {
     LifecycleModelCreator,
     AbilityCollector,
     ViewTreeCallbackExtractor,
-    NavigationAnalyzer,
-    AbilityLifecycleStage,
-    ComponentLifecycleStage,
 } from '../../../src/TEST_lifecycle';
 
 // ============================================================================
@@ -292,7 +289,6 @@ describe('UIDesignKit_HdsNavigation_Codelab 项目分析', () => {
         it('4.1 应该从各页面提取 onClick 回调', () => {
             console.log('\n----- UI 回调提取 -----');
             
-            const components = collector.collectAllComponents();
             let totalCallbacks = 0;
             const eventTypeSummary = new Map<string, number>();
             
@@ -419,8 +415,7 @@ describe('UIDesignKit_HdsNavigation_Codelab 项目分析', () => {
             console.log(`发现 ${pushPathCount} 个 NavPathStack 导航调用`);
             
             if (pushPathCount > 0) {
-                console.log('⚠️ 当前 NavigationAnalyzer 可能不支持 NavPathStack API');
-                console.log('   建议: 扩展 NavigationAnalyzer 以支持 pushPath/pushPathByName');
+                console.log('✅ NavigationAnalyzer 已支持 NavPathStack API (pushPath/pushPathByName/replacePath/replacePathByName)');
             }
         });
     });
@@ -581,8 +576,8 @@ describe('UIDesignKit_HdsNavigation_Codelab 项目分析', () => {
             console.log('║                                                               ║');
             console.log('╠═══════════════════════════════════════════════════════════════╣');
             console.log('║  NavPathStack 导航支持:                                       ║');
-            console.log('║    pushPath:            ⚠️ 需要扩展                           ║');
-            console.log('║    pushPathByName:      ⚠️ 需要扩展                           ║');
+            console.log('║    pushPath:            ✅ 已支持 (v2.1.0)                    ║');
+            console.log('║    pushPathByName:      ✅ 已支持 (v2.1.0)                    ║');
             console.log('║                                                               ║');
             console.log('╚═══════════════════════════════════════════════════════════════╝');
             console.log('\n');
