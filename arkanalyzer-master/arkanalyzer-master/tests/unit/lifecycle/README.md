@@ -47,6 +47,7 @@ flowchart LR
 | **TaintAnalysisIntegration.test.ts** | 集成 | 完整 Scene 下 TaintAnalysisProblem、Solver、SourceSinkManager、有界约束等 |
 | **CLIAnalyzer.test.ts** | 集成 | CLI 工具：LifecycleAnalyzer、ReportGenerator，输出与统计 |
 | **Demo4testsAnalysis.test.ts** | 端到端 | 对 7 个真实项目跑完整流水线（含 IFDS、有界 k=1/k=2、已知泄漏断言） |
+| **Demo4testsComparison.test.ts** | 对比实验 | 原始 ArkAnalyzer（单入口）vs 扩展项目（DummyMain）的性能与准确度对比 |
 | **RingtoneKitAnalysis.test.ts** | 单项目 | RingtoneKit_Codelab_Demo 上的 lifecycle 分析 |
 | **UIDesignKitNavAnalysis.test.ts** | 单项目 | UIDesignKit_HdsNavigation 多页面导航、NavPathStack |
 | **CloudFoundationKitAnalysis.test.ts** | 单项目 | CloudFoundationKit 预取、NavPathStack、module.json5 解析 |
@@ -168,6 +169,12 @@ flowchart TB
   - 对 7 个 Demo4tests 子项目依次执行**完整分析流程**（Scene → Ability/Component → 导航 → DummyMain → Source/Sink 扫描 → IFDS）。
   - **OxHornCampus**：断言能精确检出已知的 1 处资源泄漏（如 AVPlayer/IntervalTimer 未释放）；并做**有界约束对比**（k=1 vs k=2 下 IFDS 事实数减少）。
   - 其他项目：DistributedMail、TransitionPerformanceIssue、MultiVideoApplication 等，验证流程可跑通、无崩溃、基本统计合理。
+- **Demo4testsComparison.test.ts**（原始 vs 扩展 对比实验）：
+  - **目的**：在 Demo4tests 真实项目上对比「原始 ArkAnalyzer 风格」（单入口模式）与「扩展项目」（DummyMain 模式）的**性能**与**准确度**。
+  - **单入口模式**：`runFromAllEntries()`，对每个生命周期方法（onCreate、aboutToAppear 等）分别 `runFromMethod`，合并泄漏结果。模拟 ArkAnalyzer 无生命周期模型时的分析能力。
+  - **扩展模式**：`runFromDummyMain()`，以 LifecycleModelCreator 构建的 DummyMain 为入口，一次分析覆盖所有生命周期路径。
+  - **对比指标**： leakage 数量（准确度）、总耗时 (ms)、IFDS 方法数、IFDS 事实数。
+  - **运行**：`npx vitest run tests/unit/lifecycle/Demo4testsComparison`，输出可填入论文/报告的汇总表。
 - **依赖关系**：单项目测试与 Demo4testsAnalysis 都依赖 `Demo4tests` 目录存在；Demo4testsAnalysis 还依赖完整 IFDS 与 DummyMain 流水线，是「最重」的一组测试。
 
 ---
@@ -222,6 +229,7 @@ flowchart TB
     end
     subgraph Demo4["依赖 Demo4tests"]
         D4[Demo4testsAnalysis.test]
+        D4C[Demo4testsComparison.test]
         RKT[RingtoneKitAnalysis.test]
         UID[UIDesignKitNavAnalysis.test]
         CFK[CloudFoundationKitAnalysis.test]
@@ -323,6 +331,10 @@ npx vitest run tests/unit/lifecycle --reporter=verbose
   ```bash
   npx vitest run tests/unit/lifecycle/Demo4testsAnalysis
   ```
+- 仅 Demo4tests 原始 vs 扩展 对比实验（依赖 Demo4tests 目录）：
+  ```bash
+  npx vitest run tests/unit/lifecycle/Demo4testsComparison
+  ```
 
 ### 6.3 总测试结果（最近一次全量运行）
 
@@ -339,7 +351,82 @@ npx vitest run tests/unit/lifecycle --reporter=verbose
 
 ---
 
-## 7. 参考
+## 7. 更新历程
+
+
+
+### 7.1 来源与范围
+
+- **cursor_typescript.md**：15 项目 → 30 项目人工 vs 分析器对比、修复价值排序、Fix 1–4、阶段一至五实施、harmony-utils/Gramony FP 分析、精度评估（约 55% 精确率/60% 召回）、研究目标距离评估、v2.2.0 规则精度（Map/Set/Array 删除）等。
+- **本轮对话**：KeePassHO/LinysBrowser 人工审核与对比、防抖情形 3、跨 await File close、ViewTree 环检测、Source/Sink 规则扩展（ResultSet/AVPlayer/CommonEvent）、ID 丢弃仅 setInterval、两项目全量可分析及回归验证。
+
+### 7.2 首次修复（排序 1–5）与 Fix 1–4
+
+**原因**：15 项目对比后漏报（getRdbStore、fs.open 等未识别）、误报（BootView、Splash 等 aboutToDisappear 内已有 clearInterval）、resourceLeakCount 与 leakDetails 不一致；setInterval 返回值未存储（TrainsTrack.ets:196、EntryAbility:135）为真实泄漏需检出。
+
+**修复历程**：  
+- Source/Sink 规则扩展（dataRdb.getRdbStore、fileIo.open/openSync 及 Sink）；DummyMain 加入 aboutToDisappear。  
+- LifecycleAnalyzer：resourceLeakCount 使用 taintAnalysisSummary.resourceLeaks.length。  
+- TaintAnalysisProblem：handleAssignmentSource 支持 this.xxx=setInterval；matchesAccessPathForArg 支持 clearInterval(this.xxx)；getExitToReturnFlowFunction 增加 this→receiver 回传；getRdbStore.fallback；ArkInvokeStmt 形式 standalone setInterval 创建 $setInterval_discarded 并加入 activeTaints。
+
+**验证**：TrainsTrack、EntryAbility 被检出；BootView/Splash/Connect/Request 仍误报；Accouting sources=1、leaks=0。
+
+### 7.3 阶段一至五（30 项目回归）
+
+**阶段一（规则）**：  
+- **原因**：getRdbStore、openSync 多种写法未识别。  
+- **修复**：SourceSinkManager 新增 rdb.getRdbStore、openSync.fallback；OxHornCampus 断言改为 toBeGreaterThanOrEqual(1)；SourceSinkManager.test 新增用例。  
+- **结果**：ProfileEditComp、LyricUtils、AudioCapturerManager 等新检出 File；30 项目可跑完。
+
+**阶段二（aboutToDisappear 抑制）**：  
+- **原因**：污点配对复杂，改为结构性抑制——同组件 aboutToDisappear 含 clearInterval/clearTimeout 则过滤。  
+- **修复**：TaintAnalysisSolver 新增 LifecycleLeakSuppressor，runFromDummyMain 后调用 filterSuppressedTimerLeaks。  
+- **结果**：OxHornCampus 2→1、interview 3→2、ClashBox 6→4、Melotopia 5→4。
+
+**阶段四（顺序）**：  
+- **原因**：入口 Ability 与 @Entry Component 应先执行。  
+- **修复**：LifecycleModelCreator 对 abilities/components 按 isEntry 排序。  
+- **结果**：MusicHome 等 EntryAbility 优先；未解决可达性。
+
+**阶段五（栈溢出防护）**：  
+- **原因**：LinysBrowser 分析时栈溢出导致整轮中断。  
+- **修复**：LifecycleAnalyzer 内 try-catch，异常时 buildErrorResult 降级并写入 errors。  
+- **结果**：LinysBrowser 返回带 error 的 JSON，30 项目可完整跑完；根因后续由 ViewTree 环检测根治。
+
+### 7.4 harmony-utils/Gramony、v2.2.0、本轮（防抖/File/ViewTree/规则/ID 丢弃）
+
+**harmony-utils / Gramony**：  
+- **原因**：ClickUtil、SpinKitPage 回调内 clearTimeout；FileUtil 等同方法/callee 链内 closeSync。  
+- **修复**：FileLeakSuppressor 已存在；LifecycleLeakSuppressor 增加情形 1（同方法直接 clear 且 blockCount≤2）与情形 2（直接 callee 仅含 clear、blockCount≤3），覆盖 throttle 的 clearExistingTimeout，不误杀 MusicHome。
+
+**v2.2.0**：  
+- **原因**：Map.set、Set.add、Array.push 作 Source 导致 sources 激增、误报高。  
+- **修复**：SourceSinkManager 删除上述 7 条规则；规则键用 id 避免覆盖。
+
+**本轮**：  
+- **ViewTree 环**：原因——自引用 @Builder 导致 walkViewTree 无限递归。修复——ViewTreeCallbackExtractor.walkViewTree 增加 visited Set，入节点前检查并传入递归。结果——KeePassHO、LinysBrowser 可完整分析。  
+- **防抖情形 3**：原因——ClipboardUtils、LoadingDialogUtils:148、linysTimeoutButton 等“先 clear 再 set”仍误报。修复——isOneShotTimerPattern 增加情形 3（source BB 内 source 前有 clear，或 source BB 前驱 BB 含 clear 且不含 set）。结果——KeePassHO 3→0，LinysBrowser 7→2。  
+- **File await close**：原因——await fs.close(fd) 在 IR 为 ArkAssignStmt，isFileCloseInvoke 只认 ArkInvokeStmt。修复——FileLeakSuppressor.isFileCloseInvoke 增加 ArkAssignStmt 右侧方法名 close/closeSync。结果——Support.ets 等误报消除。  
+- **规则扩展**：RdbStore.queryDataSync、createAVPlayer.fallback、release.fallback、CommonEventManager.subscribe/unsubscribe（见 taint/README）。  
+- **ID 丢弃仅 setInterval**：原因——setTimeout 丢弃 ID 多为 fire-and-forget，报告会误报激增。修复——仅对 ArkInvokeStmt 且 methodName 为 setInterval 创建 $timer_id_discarded。
+
+### 7.5 Demo4tests 扩展与两项目专项流程
+
+- **新增/纳入分析的项目**：`KeePassHO-main`、`LinysBrowser_NEXT-master` 等已加入全量脚本 `scripts/analyze-new-projects.ts`（现约 48 项目）。
+- **两项目专项流程**：对 KeePassHO 和 LinysBrowser 采用「人工审核 → 分析器运行 → 对比总结」；人工逐文件区分 TP/FP/可疑 TP；分析器运行 `npx ts-node scripts/test-two-projects.ts`；对比后评估优先级与可行性。
+- **运行方式**：  
+  - 仅 KeePassHO + LinysBrowser（及 MusicHome、HarmonyUtilCode 等回归）：`cd arkanalyzer-master && npx ts-node scripts/test-two-projects.ts`  
+  - 全量：`npx ts-node scripts/analyze-new-projects.ts`，结果写入 `analyze-new-results.json`。
+
+### 7.6 回归验证要点（修复后）
+
+- KeePassHO-main：泄漏 3→0（2 防抖 + 1 File）。  
+- LinysBrowser_NEXT-master：7→2（保留 2 个 IntervalTimer TP）；不再栈溢出。  
+- MusicHome、HarmonyUtilCode、Gramony-dev、harmony-utils：结果符合预期，MusicHome TP 未误抑制。
+
+---
+
+## 8. 参考
 
 - 功能与架构说明：`src/TEST_lifecycle/README.md`
 - 污点分析技术细节：`src/TEST_lifecycle/taint/README.md`

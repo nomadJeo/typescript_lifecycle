@@ -106,6 +106,57 @@ describe('SourceSinkManager', () => {
             expect(source?.resourceType).toBe('ResultSet');
         });
         
+        it('应该匹配 dataRdb.getRdbStore（import dataRdb from relationalStore）', () => {
+            const callInfo: MethodCallInfo = {
+                className: 'dataRdb',
+                methodName: 'getRdbStore',
+            };
+            
+            const source = manager.isSource(callInfo);
+            
+            expect(source).not.toBeNull();
+            expect(source?.id).toBe('dataRdb.getRdbStore');
+            expect(source?.resourceType).toBe('RdbStore');
+        });
+
+        it('应该匹配 rdb.getRdbStore（import rdb from relationalStore）', () => {
+            const callInfo: MethodCallInfo = {
+                className: 'rdb',
+                methodName: 'getRdbStore',
+            };
+
+            const source = manager.isSource(callInfo);
+
+            expect(source).not.toBeNull();
+            expect(source?.id).toBe('rdb.getRdbStore');
+            expect(source?.resourceType).toBe('RdbStore');
+        });
+
+        it('应该通过 openSync.fallback 匹配任意别名的 openSync', () => {
+            const callInfo: MethodCallInfo = {
+                className: 'fileUtil',
+                methodName: 'openSync',
+            };
+
+            const source = manager.isSource(callInfo);
+
+            expect(source).not.toBeNull();
+            expect(source?.id).toBe('openSync.fallback');
+            expect(source?.resourceType).toBe('File');
+        });
+        
+        it('应该匹配 fileIo.openSync（@kit.CoreFileKit）', () => {
+            const callInfo: MethodCallInfo = {
+                className: 'fileIo',
+                methodName: 'openSync',
+            };
+            
+            const source = manager.isSource(callInfo);
+            
+            expect(source).not.toBeNull();
+            expect(source?.id).toBe('fileIo.openSync');
+        });
+        
         it('未知方法不应该匹配', () => {
             const callInfo: MethodCallInfo = {
                 className: 'unknown',

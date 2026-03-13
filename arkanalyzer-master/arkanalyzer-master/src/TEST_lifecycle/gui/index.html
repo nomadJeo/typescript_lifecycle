@@ -300,6 +300,16 @@
         .tag-entry { background: #e8f5e9; color: #2e7d32; }
         .tag-lifecycle { background: #e3f2fd; color: #1565c0; }
         .tag-callback { background: #fff3e0; color: #ef6c00; }
+        .tag-resource { background: #ffebee; color: #c62828; }
+        .tag-closure { background: #fff8e1; color: #f57f17; }
+        .tag-memory { background: #e8eaf6; color: #3949ab; }
+        .loc-link { color: #667eea; cursor: pointer; text-decoration: underline; }
+        .loc-link:hover { color: #764ba2; }
+        .advanced-options { margin-top: 15px; padding: 15px; background: #f0f4ff; border-radius: 8px; border: 1px solid #e0e0e0; }
+        .advanced-options h4 { margin-bottom: 12px; color: #333; }
+        .bounds-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 10px; }
+        .bounds-inputs label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .bounds-inputs input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
         
         .export-buttons {
             display: flex;
@@ -386,13 +396,40 @@
             max-height: 60vh;
             overflow: auto;
         }
+        .error-detail { margin-top: 8px; padding: 12px; background: #ffebee; border-radius: 6px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow: auto; display: none; }
+        .error-detail.show { display: block; }
+        .history-list { max-height: 150px; overflow-y: auto; }
+        .history-item { padding: 8px 12px; cursor: pointer; border-radius: 6px; font-size: 14px; }
+        .history-item:hover { background: #e8eaf6; }
+        .theme-toggle { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.5); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .theme-toggle:hover { background: rgba(255,255,255,0.3); }
+        body.dark { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        body.dark .card { background: #1e1e2e; }
+        body.dark .card h2 { color: #e0e0e0; border-color: #667eea; }
+        body.dark .stat-card { background: #252535; }
+        body.dark .stat-card .value { color: #667eea; }
+        body.dark .stat-card .label { color: #aaa; }
+        body.dark th, body.dark td { border-color: #333; }
+        body.dark th { background: #252535; color: #e0e0e0; }
+        body.dark tr:hover { background: #2a2a3a; }
+        body.dark input, body.dark .option-item { background: #252535; color: #e0e0e0; border-color: #444; }
+        body.dark .status-bar.info { background: #1e3a5f; color: #90caf9; }
+        body.dark .status-bar.success { background: #1b3d2e; color: #81c784; }
+        body.dark .status-bar.error { background: #3d1f1f; color: #e57373; }
+        body.dark .status-bar.loading { background: #3d3220; color: #ffb74d; }
+        body.dark .advanced-options { background: #252535; border-color: #444; }
+        body.dark .advanced-options h4, body.dark .advanced-options label { color: #ccc; }
+        body.dark .modal-content { background: #1e1e2e; }
+        body.dark .report-preview { background: #252535; color: #e0e0e0; }
+        body.dark .history-item:hover { background: #2a2a3a; }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
+        <header style="position: relative;">
             <h1>HarmonyOS 生命周期分析工具</h1>
             <p>分析鸿蒙应用的 Ability、Component 和 UI 回调结构</p>
+            <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()">🌙 深色模式</button>
         </header>
         
         <!-- 输入区域 -->
@@ -400,10 +437,15 @@
             <h2>📁 项目分析</h2>
             
             <div class="input-group">
-                <input type="text" id="projectPath" placeholder="请输入 HarmonyOS 项目路径，例如: C:\Projects\MyHarmonyApp\entry">
+                <input type="text" id="projectPath" list="pathHistory" placeholder="请输入 HarmonyOS 项目路径，例如: C:\Projects\MyHarmonyApp\entry">
+                <datalist id="pathHistory"></datalist>
                 <button class="btn btn-primary" id="analyzeBtn" onclick="startAnalysis()">
                     开始分析
                 </button>
+            </div>
+            <div style="margin-top: 8px; font-size: 13px; color: #666;">
+                <span id="historyLabel" style="cursor: pointer; text-decoration: underline;" onclick="toggleHistory()">📂 最近项目</span>
+                <div id="historyList" class="history-list" style="display: none; margin-top: 8px; border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px;"></div>
             </div>
             
             <div class="options">
@@ -423,13 +465,36 @@
                     <input type="checkbox" id="optUICallbacks" checked>
                     <label for="optUICallbacks">UI 回调提取</label>
                 </div>
+                <div class="option-item">
+                    <input type="checkbox" id="optTaintAnalysis" checked>
+                    <label for="optTaintAnalysis">运行污点分析</label>
+                </div>
             </div>
+            
+            <details class="advanced-options" id="advancedOptions">
+                <summary style="cursor: pointer; font-weight: 600; color: #667eea; margin-bottom: 10px;">高级选项：有界约束配置</summary>
+                <div class="bounds-inputs">
+                    <div>
+                        <label for="optMaxCallbackIterations">约束2：回调迭代次数 (maxCallbackIterations)</label>
+                        <input type="number" id="optMaxCallbackIterations" min="1" value="1" title="1=DAG，2+=允许重复">
+                    </div>
+                    <div>
+                        <label for="optMaxAbilitiesPerFlow">约束1：单流 Ability 数 (maxAbilitiesPerFlow)</label>
+                        <input type="number" id="optMaxAbilitiesPerFlow" min="0" value="3" title="0=不限制">
+                    </div>
+                    <div>
+                        <label for="optMaxNavigationHops">约束3：导航跳数 (maxNavigationHops)</label>
+                        <input type="number" id="optMaxNavigationHops" min="0" value="5" title="0=不限制">
+                    </div>
+                </div>
+            </details>
             
             <div class="status-bar" id="statusBar">
                 <span id="statusText"></span>
                 <div class="progress-bar" id="progressBar" style="display: none;">
                     <div class="progress"></div>
                 </div>
+                <div id="errorDetail" class="error-detail"></div>
             </div>
         </div>
         
@@ -447,6 +512,9 @@
                     <button class="tab" onclick="switchTab('components')">Component</button>
                     <button class="tab" onclick="switchTab('callbacks')">UI 回调</button>
                     <button class="tab" onclick="switchTab('navigation')">导航关系</button>
+                    <button class="tab" onclick="switchTab('sourcesinks')">Source/Sink</button>
+                    <button class="tab" onclick="switchTab('leaks')">泄漏详情</button>
+                    <button class="tab" onclick="switchTab('bounds')">有界约束</button>
                     <button class="tab" onclick="switchTab('timing')">耗时统计</button>
                 </div>
                 
@@ -495,6 +563,77 @@
                     </table>
                 </div>
                 
+                <div class="tab-content" id="tab-sourcesinks">
+                    <h3 style="margin-bottom: 12px; color: #333;">Source 位置</h3>
+                    <table id="sourcesTable">
+                        <thead>
+                            <tr>
+                                <th>资源类型</th>
+                                <th>方法签名</th>
+                                <th>文件路径</th>
+                                <th>行</th>
+                                <th>列</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                    <h3 style="margin: 24px 0 12px; color: #333;">Sink 位置</h3>
+                    <table id="sinksTable">
+                        <thead>
+                            <tr>
+                                <th>资源类型</th>
+                                <th>方法签名</th>
+                                <th>文件路径</th>
+                                <th>行</th>
+                                <th>列</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
+                <div class="tab-content" id="tab-leaks">
+                    <h3 style="margin-bottom: 12px; color: #333;">资源泄漏（Source 未到达配对 Sink）</h3>
+                    <table id="resourceLeaksTable">
+                        <thead>
+                            <tr>
+                                <th>严重程度</th>
+                                <th>资源类型</th>
+                                <th>描述</th>
+                                <th>Source 位置</th>
+                                <th>预期 Sink</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                    <h3 style="margin: 24px 0 12px; color: #333;">污点泄漏（Source→Sink 路径）</h3>
+                    <table id="taintLeaksTable">
+                        <thead>
+                            <tr>
+                                <th>描述</th>
+                                <th>Source 位置</th>
+                                <th>Sink 位置</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
+                <div class="tab-content" id="tab-bounds">
+                    <h3 style="margin-bottom: 12px; color: #333;">本次分析使用的有界约束</h3>
+                    <table id="boundsTable">
+                        <thead>
+                            <tr>
+                                <th>约束</th>
+                                <th>参数</th>
+                                <th>取值</th>
+                                <th>说明</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                
                 <div class="tab-content" id="tab-timing">
                     <table id="timingTable">
                         <thead>
@@ -536,6 +675,24 @@
         let analysisResult = null;
         let currentReport = null;
         let currentReportFormat = null;
+        let progressInterval = null;
+        const PHASE_MESSAGES = ['Scene 构建中...', 'Ability/Component 收集中...', 'DummyMain 生成中...', '污点分析中...', '即将完成...'];
+
+        function escapeHtml(str) {
+            if (str == null) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        function formatLoc(loc) {
+            if (!loc || !loc.filePath) return '-';
+            const text = loc.line > 0 ? `${loc.filePath}:${loc.line}:${loc.col || 0}` : loc.filePath;
+            const vscodeUrl = 'vscode://file/' + (loc.filePath || '').replace(/\\/g, '/') + (loc.line > 0 ? ':' + loc.line : '');
+            return '<a class="loc-link" href="' + escapeHtml(vscodeUrl) + '" title="在 IDE 中打开（Ctrl+点击复制路径）">' + escapeHtml(text) + '</a>';
+        }
         
         // 输入框验证
         const pathInput = document.getElementById('projectPath');
@@ -545,6 +702,58 @@
             clearTimeout(validateTimeout);
             validateTimeout = setTimeout(validatePath, 500);
         });
+        
+        // 深色模式
+        function toggleTheme() {
+            const dark = document.body.classList.toggle('dark');
+            localStorage.setItem('lifecycleGuiDark', dark ? '1' : '0');
+            document.getElementById('themeToggle').textContent = dark ? '☀️ 浅色模式' : '🌙 深色模式';
+        }
+        if (localStorage.getItem('lifecycleGuiDark') === '1') {
+            document.body.classList.add('dark');
+            document.getElementById('themeToggle').textContent = '☀️ 浅色模式';
+        }
+        
+        // 历史项目
+        const HISTORY_KEY = 'lifecycleGuiHistory';
+        const MAX_HISTORY = 10;
+        function loadHistory() {
+            try {
+                const raw = localStorage.getItem(HISTORY_KEY);
+                return raw ? JSON.parse(raw) : [];
+            } catch { return []; }
+        }
+        function saveToHistory(path) {
+            if (!path || path.length < 3) return;
+            let arr = loadHistory().filter(p => p !== path);
+            arr.unshift(path);
+            arr = arr.slice(0, MAX_HISTORY);
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(arr));
+            renderHistory();
+        }
+        let lastHistoryPaths = [];
+        function renderHistory() {
+            const arr = loadHistory();
+            lastHistoryPaths = arr;
+            const datalist = document.getElementById('pathHistory');
+            const listEl = document.getElementById('historyList');
+            datalist.innerHTML = arr.map(p => `<option value="${escapeHtml(p)}">`).join('');
+            listEl.innerHTML = arr.length ? arr.map((p, i) => `<div class="history-item" data-idx="${i}" onclick="pickHistoryByIdx(${i})">${escapeHtml(p)}</div>`).join('') : '<div style="padding:8px;color:#666;">暂无历史记录</div>';
+        }
+        function pickHistoryByIdx(i) {
+            const p = lastHistoryPaths[i];
+            if (p) {
+                document.getElementById('projectPath').value = p;
+                document.getElementById('historyList').style.display = 'none';
+                validatePath();
+            }
+        }
+        function toggleHistory() {
+            const el = document.getElementById('historyList');
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+            if (el.style.display === 'block') renderHistory();
+        }
+        renderHistory();
         
         async function validatePath() {
             const path = pathInput.value.trim();
@@ -563,12 +772,15 @@
         }
         
         // 显示状态
-        function showStatus(message, type) {
+        function showStatus(message, type, errorDetail) {
             const statusBar = document.getElementById('statusBar');
             const statusText = document.getElementById('statusText');
             const progressBar = document.getElementById('progressBar');
+            const errorEl = document.getElementById('errorDetail');
             
             statusBar.className = 'status-bar ' + type;
+            errorEl.classList.remove('show');
+            errorEl.textContent = '';
             
             if (type === 'loading') {
                 statusText.innerHTML = '<span class="spinner"></span>' + message;
@@ -576,6 +788,10 @@
             } else {
                 statusText.textContent = message;
                 progressBar.style.display = 'none';
+                if (type === 'error' && errorDetail) {
+                    errorEl.textContent = errorDetail;
+                    errorEl.classList.add('show');
+                }
             }
         }
         
@@ -591,13 +807,25 @@
             const analyzeBtn = document.getElementById('analyzeBtn');
             analyzeBtn.disabled = true;
             
-            showStatus('正在分析项目，请稍候...', 'loading');
+            let phaseIdx = 0;
+            const updatePhase = () => {
+                showStatus(PHASE_MESSAGES[phaseIdx % PHASE_MESSAGES.length], 'loading');
+                phaseIdx++;
+            };
+            updatePhase();
+            progressInterval = setInterval(updatePhase, 2500);
             
             const options = {
                 inferTypes: document.getElementById('optInferTypes').checked,
                 generateDummyMain: document.getElementById('optDummyMain').checked,
                 analyzeNavigation: document.getElementById('optNavigation').checked,
                 extractUICallbacks: document.getElementById('optUICallbacks').checked,
+                runTaintAnalysis: document.getElementById('optTaintAnalysis').checked,
+                bounds: {
+                    maxCallbackIterations: parseInt(document.getElementById('optMaxCallbackIterations').value, 10) || 1,
+                    maxAbilitiesPerFlow: parseInt(document.getElementById('optMaxAbilitiesPerFlow').value, 10) || 3,
+                    maxNavigationHops: parseInt(document.getElementById('optMaxNavigationHops').value, 10) || 5,
+                },
             };
             
             try {
@@ -610,17 +838,26 @@
                 const data = await res.json();
                 
                 if (data.error) {
-                    showStatus('分析失败: ' + data.error, 'error');
+                    clearInterval(progressInterval);
+                    progressInterval = null;
+                    const errDetail = data.detail || (typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
+                    showStatus('分析失败: ' + (typeof data.error === 'string' ? data.error : data.error?.message || data.error), 'error', errDetail);
                     analyzeBtn.disabled = false;
                     return;
                 }
                 
+                clearInterval(progressInterval);
+                progressInterval = null;
+                saveToHistory(projectPath);
                 analysisResult = data.result;
                 showStatus(`分析完成！耗时 ${data.result.duration.total}ms`, 'success');
                 displayResults(data.result);
                 
             } catch (error) {
-                showStatus('请求失败: ' + error.message, 'error');
+                clearInterval(progressInterval);
+                progressInterval = null;
+                const errDetail = error.stack || error.message;
+                showStatus('请求失败: ' + error.message, 'error', errDetail);
             }
             
             analyzeBtn.disabled = false;
@@ -632,6 +869,24 @@
             
             // 摘要统计
             const summaryGrid = document.getElementById('summaryGrid');
+            const taintStats = (result.summary.sourceCount != null) ? `
+                <div class="stat-card">
+                    <div class="value">${result.summary.sourceCount}</div>
+                    <div class="label">Source</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.sinkCount ?? 0}</div>
+                    <div class="label">Sink</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.resourceLeakCount}</div>
+                    <div class="label">资源泄漏</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value">${result.summary.taintLeakCount ?? 0}</div>
+                    <div class="label">污点泄漏</div>
+                </div>
+            ` : '';
             summaryGrid.innerHTML = `
                 <div class="stat-card">
                     <div class="value">${result.summary.totalFiles}</div>
@@ -657,6 +912,7 @@
                     <div class="value">${result.summary.uiCallbackCount}</div>
                     <div class="label">UI 回调</div>
                 </div>
+                ${taintStats}
             `;
             
             // Ability 表格
@@ -721,16 +977,94 @@
             }
             
             // 耗时统计
+            const timingRows = [
+                ['Scene 构建', result.duration.sceneBuilding + 'ms'],
+                ['Ability 收集', result.duration.abilityCollection + 'ms'],
+                ['Component 收集', result.duration.componentCollection + 'ms'],
+                ['UI 回调提取', result.duration.uiCallbackExtraction + 'ms'],
+                ['导航分析', result.duration.navigationAnalysis + 'ms'],
+                ['DummyMain 生成', result.duration.dummyMainGeneration + 'ms'],
+                ['资源泄漏检测', result.duration.resourceLeakDetection + 'ms'],
+                ['IFDS 污点分析', result.duration.taintAnalysis + 'ms'],
+            ];
+            if (result.taintAnalysis?.statistics) {
+                const s = result.taintAnalysis.statistics;
+                timingRows.push(['  IFDS 方法数', s.analyzedMethods], ['  IFDS 事实数', s.totalFacts]);
+            }
+            timingRows.push(['总耗时', result.duration.total + 'ms']);
             const timingTbody = document.querySelector('#timingTable tbody');
-            timingTbody.innerHTML = `
-                <tr><td>Scene 构建</td><td>${result.duration.sceneBuilding}ms</td></tr>
-                <tr><td>Ability 收集</td><td>${result.duration.abilityCollection}ms</td></tr>
-                <tr><td>Component 收集</td><td>${result.duration.componentCollection}ms</td></tr>
-                <tr><td>UI 回调提取</td><td>${result.duration.uiCallbackExtraction}ms</td></tr>
-                <tr><td>导航分析</td><td>${result.duration.navigationAnalysis}ms</td></tr>
-                <tr><td>DummyMain 生成</td><td>${result.duration.dummyMainGeneration}ms</td></tr>
-                <tr style="font-weight: bold;"><td>总耗时</td><td>${result.duration.total}ms</td></tr>
-            `;
+            timingTbody.innerHTML = timingRows.map(([label, val]) =>
+                `<tr${label === '总耗时' ? ' style="font-weight: bold;"' : ''}><td>${label}</td><td>${val}</td></tr>`
+            ).join('');
+
+            // Source/Sink 表格
+            const sources = result.sourceLocations || [];
+            const sinks = result.sinkLocations || [];
+            const sourcesTbody = document.querySelector('#sourcesTable tbody');
+            const sinksTbody = document.querySelector('#sinksTable tbody');
+            sourcesTbody.innerHTML = sources.length > 0
+                ? sources.map(s => `
+                    <tr>
+                        <td>${escapeHtml(s.resourceType)}</td>
+                        <td><code style="font-size: 12px;">${escapeHtml(s.methodSig)}</code></td>
+                        <td>${formatLoc({ filePath: s.filePath, line: s.line, col: s.col })}</td>
+                        <td>${s.line}</td>
+                        <td>${s.col}</td>
+                    </tr>
+                `).join('')
+                : '<tr><td colspan="5" style="color: #666;">未检测到 Source（请勾选「运行污点分析」）</td></tr>';
+            sinksTbody.innerHTML = sinks.length > 0
+                ? sinks.map(s => `
+                    <tr>
+                        <td>${escapeHtml(s.resourceType)}</td>
+                        <td><code style="font-size: 12px;">${escapeHtml(s.methodSig)}</code></td>
+                        <td>${formatLoc({ filePath: s.filePath, line: s.line, col: s.col })}</td>
+                        <td>${s.line}</td>
+                        <td>${s.col}</td>
+                    </tr>
+                `).join('')
+                : '<tr><td colspan="5" style="color: #666;">未检测到 Sink</td></tr>';
+
+            // 泄漏详情表格
+            const resourceLeaks = result.taintAnalysis?.resourceLeaks || [];
+            const taintLeaks = result.taintAnalysis?.taintLeaks || [];
+            const rlTbody = document.querySelector('#resourceLeaksTable tbody');
+            const tlTbody = document.querySelector('#taintLeaksTable tbody');
+            const categoryLabel = (c) => { const m = { resource: '资源', closure: '闭包', memory: '内存' }; return m[c] || c || '-'; };
+            const categoryClass = (c) => { const m = { resource: 'tag-resource', closure: 'tag-closure', memory: 'tag-memory' }; return m[c] || ''; };
+            rlTbody.innerHTML = resourceLeaks.length > 0
+                ? resourceLeaks.map(rl => `
+                    <tr>
+                        <td><span class="tag ${categoryClass(rl.category)}">${escapeHtml(categoryLabel(rl.category))}</span></td>
+                        <td>${escapeHtml(rl.resourceType)}</td>
+                        <td>${escapeHtml(rl.description)}</td>
+                        <td>${formatLoc(rl.sourceLocation)}</td>
+                        <td><code style="font-size: 12px;">${escapeHtml(rl.expectedSink)}</code></td>
+                    </tr>
+                `).join('')
+                : '<tr><td colspan="5" style="color: #666;">未检测到资源泄漏</td></tr>';
+            tlTbody.innerHTML = taintLeaks.length > 0
+                ? taintLeaks.map(tl => `
+                    <tr>
+                        <td>${escapeHtml(tl.description)}</td>
+                        <td>${formatLoc(tl.sourceLocation)}</td>
+                        <td>${formatLoc(tl.sinkLocation)}</td>
+                    </tr>
+                `).join('')
+                : '<tr><td colspan="3" style="color: #666;">未检测到污点泄漏</td></tr>';
+
+            // 有界约束表格
+            const bounds = result.boundsUsed;
+            const boundsTbody = document.querySelector('#boundsTable tbody');
+            if (bounds) {
+                boundsTbody.innerHTML = `
+                    <tr><td>约束1</td><td>maxAbilitiesPerFlow</td><td>${bounds.maxAbilitiesPerFlow}</td><td>单条数据流最多流经的 Ability 数</td></tr>
+                    <tr><td>约束2</td><td>maxCallbackIterations</td><td>${bounds.maxCallbackIterations}</td><td>DummyMain 回调序列重复次数（1=DAG）</td></tr>
+                    <tr><td>约束3</td><td>maxNavigationHops</td><td>${bounds.maxNavigationHops}</td><td>单条数据流最多导航跳数</td></tr>
+                `;
+            } else {
+                boundsTbody.innerHTML = '<tr><td colspan="4" style="color: #666;">未运行污点分析，无约束信息</td></tr>';
+            }
             
             // 滚动到结果区域
             document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });

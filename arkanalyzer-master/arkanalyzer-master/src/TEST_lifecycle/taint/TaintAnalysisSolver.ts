@@ -26,8 +26,9 @@
 
 import { Scene } from '../../Scene';
 import { DataflowSolver } from '../../core/dataflow/DataflowSolver';
-import { Stmt } from '../../core/base/Stmt';
+import { Stmt, ArkInvokeStmt, ArkAssignStmt } from '../../core/base/Stmt';
 import { ArkMethod } from '../../core/model/ArkMethod';
+import { ArkClass } from '../../core/model/ArkClass';
 
 import { TaintFact } from './TaintFact';
 import { TaintAnalysisProblem, TaintAnalysisConfig, ResourceLeak, TaintLeak } from './TaintAnalysisProblem';
@@ -179,7 +180,12 @@ export class TaintAnalysisRunner {
         
         // Step 4: 收集结果
         const reachedFacts = solver.getReachedFacts();
-        const resourceLeaks = solver.getResourceLeaks();
+        let resourceLeaks = solver.getResourceLeaks();
+        // 阶段二：结构性抑制 - 若同组件的 aboutToDisappear 中含 clearInterval/clearTimeout，则抑制 timer 泄漏误报
+        resourceLeaks = LifecycleLeakSuppressor.filterSuppressedTimerLeaks(this.scene, resourceLeaks);
+        // 阶段六：File 泄漏结构性抑制 - 若 Source 所在方法（含递归调用的 callee）中存在 closeSync/close 调用，则抑制 File 误报
+        resourceLeaks = FileLeakSuppressor.filterSuppressedFileLeaks(this.scene, resourceLeaks);
+        
         const taintLeaks = solver.getTaintLeaks();
         
         return {
@@ -334,6 +340,7 @@ export class TaintAnalysisRunner {
     private countAnalyzedMethods(reachedFacts: Map<Stmt, Set<TaintFact>>): number {
         const methods = new Set<string>();
         for (const stmt of reachedFacts.keys()) {
+            if (!stmt) continue;
             const cfg = stmt.getCfg();
             if (cfg) {
                 methods.add(cfg.getDeclaringMethod().getSignature().toString());
@@ -348,6 +355,283 @@ export class TaintAnalysisRunner {
             count += facts.size;
         }
         return count;
+    }
+}
+
+// ============================================================================
+// 共享辅助
+// ============================================================================
+
+function getDirectCallee(stmt: Stmt, scene: Scene): ArkMethod | null {
+    if (!(stmt instanceof ArkInvokeStmt)) return null;
+    const sig = stmt.getInvokeExpr()?.getMethodSignature();
+    if (!sig) return null;
+    return scene.getMethod(sig) ?? null;
+}
+
+// ============================================================================
+// LifecycleLeakSuppressor - 结构性抑制（阶段二）
+// ============================================================================
+
+/**
+ * 生命周期泄漏结构性抑制
+ * 当同组件的 aboutToDisappear 中含 clearInterval/clearTimeout 时，抑制 setInterval/setTimeout 的误报
+ */
+class LifecycleLeakSuppressor {
+    private static readonly TIMER_TYPES = ['IntervalTimer', 'TimeoutTimer'];
+    private static readonly RELEASE_METHODS = ['clearInterval', 'clearTimeout'];
+
+    static filterSuppressedTimerLeaks(scene: Scene, leaks: ResourceLeak[]): ResourceLeak[] {
+        return leaks.filter(leak => !this.shouldSuppress(scene, leak));
+    }
+
+    private static shouldSuppress(scene: Scene, leak: ResourceLeak): boolean {
+        if (!this.TIMER_TYPES.includes(leak.resourceType)) return false;
+
+        // 检查1：Source 语句（setTimeout/setInterval 调用）的直接回调 lambda 中含 clearTimeout/clearInterval
+        // 且该 lambda 中没有条件逻辑（属于一次性 timer 模式）
+        // 避免递归进入整个 callee 链，防止将条件性清理（TP）也误判为 FP
+        if (this.isOneShotTimerPattern(scene, leak.sourceStmt)) return true;
+
+        // 检查2：同组件的 aboutToDisappear 中含 clearInterval/clearTimeout（递归搜索）
+        // 适用于组件销毁时统一清理 timer 的模式
+        const sourceClass = this.findDeclaringClass(scene, leak.sourceStmt);
+        if (!sourceClass) return false;
+        const aboutToDisappear = sourceClass.getMethodWithName('aboutToDisappear');
+        if (!aboutToDisappear || !aboutToDisappear.getCfg()) return false;
+        return this.methodContainsTimerRelease(aboutToDisappear, scene, new Set());
+    }
+
+    /**
+     * 检测"一次性 Timer / 防抖 Timer"模式（精确版）：
+     *
+     * 情形1：Source 所在方法的 CFG 中**直接语句**含 clearTimeout/clearInterval，且方法无条件分支（blockCount ≤ 2）。
+     *   - 匹配纯顺序的 debounce 方法。
+     *   - MusicControlComponent.%AM1$build 有 if/else（blockCount=4），不触发本情形。
+     *
+     * 情形2：Source 所在方法的直接 callee 只含 clearTimeout/clearInterval（不含 set），
+     *   且该 callee 的 CFG 基本块数 ≤ 3（允许 if(x){clearTimeout(x)} 单条件防护）。
+     *   - 匹配 throttle 的 clearExistingTimeout（blockCount=3，仅含 clearTimeout）。
+     *   - MusicControlComponent 的 lambda `%AM2$build`（blockCount=3）含有 setInterval，
+     *     被"仅含 clear，不含 set"条件排除，不触发本情形。
+     *
+     * 情形3（防抖 BB 前驱检测）：source stmt 所在的基本块内，在 source 之前存在 clearTimeout/clearInterval；
+     *   或者 source 所在 BB 的所有直接前驱 BB 中存在 clearTimeout/clearInterval（且前驱不含 set）。
+     *   - 匹配 `clearTimeout(id); id = setTimeout(...)` 的经典防抖写法，无论方法 blockCount 多少。
+     *   - 对 MusicControlComponent TP：source（setInterval）在 `if` 分支，clear 在 `else` 分支，
+     *     clear 所在 BB 不是 source BB 的直接前驱（两者是 if/else 兄弟分支），不触发本情形。
+     *   - 对 ClipboardUtils：`if(x){clearTimeout}` 的 BB 是 source BB 的直接前驱，且前驱不含 set → 触发。
+     *   - 对 linysTimeoutButton：clearTimeout 和 setTimeout 在 if-else 后的同一顺序 BB → 触发。
+     */
+    private static isOneShotTimerPattern(scene: Scene, sourceStmt: Stmt): boolean {
+        const sourceMethod = this.findContainingMethod(scene, sourceStmt);
+        if (!sourceMethod) return false;
+        const cfg = sourceMethod.getCfg();
+        if (!cfg) return false;
+
+        const blocks = [...cfg.getBlocks()];
+
+        // 找到 source stmt 所在的 BB
+        let sourceBlock: (typeof blocks)[0] | undefined;
+        for (const block of blocks) {
+            const stmts = block.getStmts();
+            if (stmts.includes(sourceStmt)) { sourceBlock = block; break; }
+        }
+
+        for (const block of blocks) {
+            for (const stmt of block.getStmts()) {
+                // 情形1：Source 方法直接语句含 clearTimeout/clearInterval，且方法无条件分支
+                if (this.isTimerReleaseInvoke(stmt) && blocks.length <= 2) return true;
+
+                // 情形2：直接 callee 只含 clear 调用（不含 set），且 callee blockCount ≤ 3
+                const callee = getDirectCallee(stmt, scene);
+                if (callee) {
+                    const calleeCfg = callee.getCfg();
+                    if (!calleeCfg) continue;
+                    const calleeBlocks = [...calleeCfg.getBlocks()];
+                    if (calleeBlocks.length > 3) continue;
+                    let hasRelease = false;
+                    let hasSource = false;
+                    for (const cb of calleeBlocks) {
+                        for (const cs of cb.getStmts()) {
+                            if (this.isTimerReleaseInvoke(cs)) hasRelease = true;
+                            if (this.isTimerSourceInvoke(cs)) hasSource = true;
+                        }
+                    }
+                    if (hasRelease && !hasSource) return true;
+                }
+            }
+        }
+
+        // 情形3：source BB 内在 source 之前有 clear；或 source BB 的所有直接前驱中有 clear（前驱不含 set）
+        if (sourceBlock) {
+            // 3a：同 BB 内，source 之前有 clear
+            const stmtsInSourceBlock = sourceBlock.getStmts();
+            const srcIdx = stmtsInSourceBlock.indexOf(sourceStmt);
+            for (let i = 0; i < srcIdx; i++) {
+                if (this.isTimerReleaseInvoke(stmtsInSourceBlock[i])) return true;
+            }
+
+            // 3b：直接前驱 BB 含 clear 且不含 set（这样的前驱是 guard 块，如 `if(id) clearTimeout(id)`）
+            for (const pred of (sourceBlock as any).getPredecessors() as typeof blocks) {
+                let predHasClear = false;
+                let predHasSet = false;
+                for (const s of pred.getStmts()) {
+                    if (this.isTimerReleaseInvoke(s)) predHasClear = true;
+                    if (this.isTimerSourceInvoke(s)) predHasSet = true;
+                }
+                if (predHasClear && !predHasSet) return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static isTimerSourceInvoke(stmt: Stmt): boolean {
+        if (stmt instanceof ArkAssignStmt) {
+            const r = (stmt as ArkAssignStmt).getRightOp();
+            if (r && (r as any).getMethodSignature) {
+                const name = (r as any).getMethodSignature()?.getMethodSubSignature()?.getMethodName() ?? '';
+                return ['setTimeout', 'setInterval'].includes(name);
+            }
+        }
+        return false;
+    }
+
+    private static findContainingMethod(scene: Scene, stmt: Stmt): ArkMethod | null {
+        for (const method of scene.getMethods()) {
+            const cfg = method.getCfg();
+            if (!cfg) continue;
+            for (const block of cfg.getBlocks()) {
+                for (const s of block.getStmts()) {
+                    if (s === stmt) return method;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static findDeclaringClass(scene: Scene, stmt: Stmt): ArkClass | null {
+        for (const method of scene.getMethods()) {
+            const cfg = method.getCfg();
+            if (!cfg) continue;
+            for (const block of cfg.getBlocks()) {
+                for (const s of block.getStmts()) {
+                    if (s === stmt) return method.getDeclaringArkClass();
+                }
+            }
+        }
+        return null;
+    }
+
+    private static methodContainsTimerRelease(method: ArkMethod, scene: Scene, visited: Set<string>): boolean {
+        const sig = method.getSignature().toString();
+        if (visited.has(sig)) return false;
+        visited.add(sig);
+        const cfg = method.getCfg();
+        if (!cfg) return false;
+        for (const block of cfg.getBlocks()) {
+            for (const stmt of block.getStmts()) {
+                if (this.isTimerReleaseInvoke(stmt)) return true;
+                const callee = getDirectCallee(stmt, scene);
+                if (callee && this.methodContainsTimerRelease(callee, scene, visited)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static isTimerReleaseInvoke(stmt: Stmt): boolean {
+        if (!(stmt instanceof ArkInvokeStmt)) return false;
+        const name = stmt.getInvokeExpr()?.getMethodSignature()?.getMethodSubSignature()?.getMethodName() ?? '';
+        return this.RELEASE_METHODS.includes(name);
+    }
+}
+
+// ============================================================================
+// FileLeakSuppressor - File 泄漏结构性抑制（阶段六）
+// ============================================================================
+
+/**
+ * File 泄漏结构性抑制
+ * 当 Source 所在方法（含其调用的 callee）中存在 closeSync/close 等文件释放调用时，抑制 File 泄漏误报。
+ * 用于解决：harmony-utils 工具库封装（FileUtil.openSync + FileUtil.closeSync 同方法）、
+ * Gramony fs.openSync + fs.closeSync 相邻行等误报。
+ */
+class FileLeakSuppressor {
+    private static readonly FILE_CLOSE_METHODS = ['closeSync', 'close'];
+
+    static filterSuppressedFileLeaks(scene: Scene, leaks: ResourceLeak[]): ResourceLeak[] {
+        return leaks.filter(leak => !this.shouldSuppress(scene, leak));
+    }
+
+    private static shouldSuppress(scene: Scene, leak: ResourceLeak): boolean {
+        if (leak.resourceType !== 'File') return false;
+        const sourceMethod = this.findContainingMethod(scene, leak.sourceStmt);
+        if (!sourceMethod || !sourceMethod.getCfg()) return false;
+
+        // 检查1：Source 所在方法（含其 callee 链）内含 close 调用
+        if (this.methodContainsFileClose(sourceMethod, scene, new Set())) return true;
+
+        // 检查2：查找同一类中所有 lambda 子方法，检查它们是否含有 close 调用。
+        // 用于处理 .then/.finally 异步回调（lambda 是 Source 方法的"同级嵌套"方法）。
+        const sourceClass = sourceMethod.getDeclaringArkClass?.();
+        if (sourceClass) {
+            for (const m of sourceClass.getMethods()) {
+                if (m === sourceMethod) continue;
+                const mSig = m.getSignature().toString();
+                // lambda 方法名包含 '$'，且其父方法签名与 sourceMethod 有公共前缀
+                if (!mSig.includes('$')) continue;
+                if (this.methodContainsFileClose(m, scene, new Set())) return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static findContainingMethod(scene: Scene, stmt: Stmt): ArkMethod | null {
+        for (const method of scene.getMethods()) {
+            const cfg = method.getCfg();
+            if (!cfg) continue;
+            for (const block of cfg.getBlocks()) {
+                for (const s of block.getStmts()) {
+                    if (s === stmt) return method;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static methodContainsFileClose(method: ArkMethod, scene: Scene, visited: Set<string>): boolean {
+        const sig = method.getSignature().toString();
+        if (visited.has(sig)) return false;
+        visited.add(sig);
+        const cfg = method.getCfg();
+        if (!cfg) return false;
+        for (const block of cfg.getBlocks()) {
+            for (const stmt of block.getStmts()) {
+                if (this.isFileCloseInvoke(stmt)) return true;
+                const callee = getDirectCallee(stmt, scene);
+                if (callee && this.methodContainsFileClose(callee, scene, visited)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static isFileCloseInvoke(stmt: Stmt): boolean {
+        // 情形 A：直接调用语句（ArkInvokeStmt）
+        if (stmt instanceof ArkInvokeStmt) {
+            const name = stmt.getInvokeExpr()?.getMethodSignature()?.getMethodSubSignature()?.getMethodName() ?? '';
+            return this.FILE_CLOSE_METHODS.includes(name);
+        }
+        // 情形 B：赋值语句右侧为 close 调用，e.g. `await fs.close(fd)` 在 IR 中为 ArkAssignStmt
+        if (stmt instanceof ArkAssignStmt) {
+            const rhs = (stmt as ArkAssignStmt).getRightOp();
+            if (rhs && (rhs as any).getMethodSignature) {
+                const name = (rhs as any).getMethodSignature()?.getMethodSubSignature()?.getMethodName() ?? '';
+                return this.FILE_CLOSE_METHODS.includes(name);
+            }
+        }
+        return false;
     }
 }
 

@@ -27,7 +27,7 @@ import { Local } from '../../core/base/Local';
 import { Value } from '../../core/base/Value';
 import { ArkInstanceFieldRef } from '../../core/base/Ref';
 import { ArkInstanceInvokeExpr, ArkStaticInvokeExpr, AbstractInvokeExpr } from '../../core/base/Expr';
-import { ClassType } from '../../core/base/Type';
+import { ClassType, NumberType } from '../../core/base/Type';
 
 import { TaintFact, AccessPath, SourceDefinition, ILocal, IFieldSignature, IStmt } from './TaintFact';
 import { SourceSinkManager, MethodCallInfo } from './SourceSinkManager';
@@ -261,6 +261,20 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                             result.add(taint);
                         }
                     }
+                    // setInterval 返回值未存储的 Source（ID 被丢弃，会持续执行无法取消 → 必定泄漏）
+                    // 注意：setTimeout 的 ID 丢弃通常是 fire-and-forget 一次性延时动画/布局，不在此处检测
+                    if (srcStmt instanceof ArkInvokeStmt) {
+                        const invokeExpr = srcStmt.getInvokeExpr();
+                        const callInfo = problem.extractCallInfo(invokeExpr);
+                        const sourceDef = problem.sourceSinkManager.isSource(callInfo);
+                        if (sourceDef && sourceDef.returnTainted && callInfo.methodName === 'setInterval') {
+                            const discardLocal = new Local('$timer_id_discarded', NumberType.getInstance());
+                            const ap = new AccessPath(discardLocal as ILocal, null, [], false);
+                            const taint = TaintFact.createFromSource(ap, sourceDef, srcStmt as IStmt);
+                            result.add(taint);
+                            problem.activeTaints.set(srcStmt as IStmt, taint);
+                        }
+                    }
                     
                     return result;
                 }
@@ -369,7 +383,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
      * 返回边的流函数
      * 处理函数返回时污点从被调用者到调用者的传播
      */
-    getExitToReturnFlowFunction(srcStmt: Stmt, tgtStmt: Stmt, callStmt: Stmt): FlowFunction<TaintFact> {
+    getExitToReturnFlowFunction(srcStmt: Stmt, _tgtStmt: Stmt, callStmt: Stmt): FlowFunction<TaintFact> {
         const problem = this;
         
         return new (class implements FlowFunction<TaintFact> {
@@ -389,6 +403,20 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                         const leftOp = callStmt.getLeftOp();
                         if (leftOp instanceof Local) {
                             const newAp = dataFact.accessPath.replaceBase(leftOp as ILocal);
+                            result.add(dataFact.deriveWithNewAccessPath(newAp, srcStmt as IStmt));
+                        }
+                    }
+                }
+                
+                // 实例方法返回时：将 callee 的 this.xxx 映射回 caller 的 receiver.xxx
+                // 使 aboutToAppear 中的 this.timer 能传播到 aboutToDisappear 的 clearInterval(this.timer)
+                if (callStmt instanceof ArkInvokeStmt) {
+                    const invokeExpr = callStmt.getInvokeExpr();
+                    if (invokeExpr instanceof ArkInstanceInvokeExpr) {
+                        const receiver = invokeExpr.getBase();
+                        const ap = dataFact.accessPath;
+                        if (ap.base && ap.base.getName() === 'this' && receiver instanceof Local) {
+                            const newAp = dataFact.accessPath.replaceBase(receiver as ILocal);
                             result.add(dataFact.deriveWithNewAccessPath(newAp, srcStmt as IStmt));
                         }
                     }
@@ -424,8 +452,18 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                             }
                         }
                     } else if (srcStmt instanceof ArkInvokeStmt) {
-                        // 检查调用本身是否是 Source（无返回值的情况）
-                        // 如 sensor.on() 等
+                        // 检查 setInterval 返回值未存储的 Source（ID 被丢弃，持续执行无法取消 → 必定泄漏）
+                        // 注意：setTimeout 的 ID 丢弃通常是 fire-and-forget 一次性延时，不在此处检测
+                        const invokeExpr = srcStmt.getInvokeExpr();
+                        const callInfo = problem.extractCallInfo(invokeExpr);
+                        const sourceDef = problem.sourceSinkManager.isSource(callInfo);
+                        if (sourceDef && sourceDef.returnTainted && callInfo.methodName === 'setInterval') {
+                            const discardLocal = new Local('$timer_id_discarded', NumberType.getInstance());
+                            const ap = new AccessPath(discardLocal as ILocal, null, [], false);
+                            const taint = TaintFact.createFromSource(ap, sourceDef, srcStmt as IStmt);
+                            result.add(taint);
+                            problem.activeTaints.set(srcStmt as IStmt, taint);
+                        }
                     }
                     
                     return result;
@@ -541,6 +579,18 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
                     result.add(taint);
 
                     // 记录活跃污点：key = Source 语句对象引用，与后续变量名无关
+                    this.activeTaints.set(stmt as IStmt, taint);
+                } else if (leftOp instanceof ArkInstanceFieldRef) {
+                    // this.xxx = setInterval(...) 支持字段写入
+                    const fieldRef = leftOp as ArkInstanceFieldRef;
+                    const ap = new AccessPath(
+                        fieldRef.getBase() as ILocal,
+                        null,
+                        [fieldRef.getFieldSignature() as IFieldSignature],
+                        sourceDef.taintSubFields ?? false
+                    );
+                    const taint = TaintFact.createFromSource(ap, sourceDef, stmt as IStmt);
+                    result.add(taint);
                     this.activeTaints.set(stmt as IStmt, taint);
                 }
             }
@@ -669,7 +719,7 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
         for (const paramIndex of sinkDef.requiredTaintedParamIndices) {
             if (paramIndex < args.length) {
                 const arg = args[paramIndex];
-                if (this.matchesAccessPathBase(dataFact.accessPath, arg)) {
+                if (this.matchesAccessPathForArg(dataFact.accessPath, arg)) {
                     this.recordTaintReachedSink(dataFact, stmt, sinkDef);
                     return;
                 }
@@ -723,6 +773,42 @@ export class TaintAnalysisProblem extends DataflowProblem<TaintFact> {
         
         if (value instanceof Local) {
             return base.getName() === value.getName();
+        }
+        
+        return false;
+    }
+    
+    /**
+     * 检查 AccessPath 是否匹配参数值（支持 clearInterval(this.xxx) 等字段引用）
+     */
+    private matchesAccessPathForArg(ap: AccessPath, value: Value): boolean {
+        if (ap.isEmpty() || ap.isZero()) {
+            return false;
+        }
+        
+        const base = ap.base;
+        if (!base) {
+            return false;
+        }
+        
+        if (value instanceof Local) {
+            // 局部变量：base 匹配且无字段，或 taintSubFields
+            if (ap.fields.length === 0) {
+                return base.getName() === value.getName();
+            }
+            return base.getName() === value.getName() && ap.taintSubFields;
+        }
+        
+        if (value instanceof ArkInstanceFieldRef) {
+            const fieldRef = value as ArkInstanceFieldRef;
+            if (base.getName() !== fieldRef.getBase().getName()) {
+                return false;
+            }
+            if (ap.fields.length === 0) {
+                return ap.taintSubFields;
+            }
+            return ap.fields.length === 1 &&
+                ap.fields[0].getFieldName() === fieldRef.getFieldSignature().getFieldName();
         }
         
         return false;

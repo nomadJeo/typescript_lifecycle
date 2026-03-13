@@ -183,15 +183,20 @@ export class ViewTreeCallbackExtractor {
     private walkViewTree(
         node: ViewTreeNode,
         callbacks: UICallbackInfo[],
-        componentClass: ArkClass
+        componentClass: ArkClass,
+        visited: Set<ViewTreeNode> = new Set()
     ): void {
+        // 防止 @Builder 自引用（如 .bindMenu(this.SortMenu) 在 SortMenu 内部）导致无限递归
+        if (visited.has(node)) return;
+        visited.add(node);
+
         // 提取当前节点的回调
         const nodeCallbacks = this.extractNodeCallbacks(node, componentClass);
         callbacks.push(...nodeCallbacks);
         
         // 递归处理子节点
         for (const child of node.children) {
-            this.walkViewTree(child, callbacks, componentClass);
+            this.walkViewTree(child, callbacks, componentClass, visited);
         }
     }
 

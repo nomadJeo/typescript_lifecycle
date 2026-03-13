@@ -354,6 +354,16 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
         description: '创建音视频播放器实例',
     },
     {
+        id: 'createAVPlayer.fallback',
+        methodPattern: 'createAVPlayer',
+        category: 'resource',
+        resourceType: 'AVPlayer',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'AVPlayer.release',
+        description: '创建音视频播放器实例（宽松匹配，className 未知时回退）',
+    },
+    {
         id: 'media.createAVRecorder',
         methodPattern: 'media.createAVRecorder',
         category: 'resource',
@@ -505,6 +515,36 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
         pairedSinkId: 'fileio.closeSync',
         description: '同步打开文件（旧 API）',
     },
+    {
+        id: 'fileIo.open',
+        methodPattern: 'fileIo.open',
+        category: 'resource',
+        resourceType: 'File',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'fileIo.close',
+        description: '打开文件（@kit.CoreFileKit fileIo as fs）',
+    },
+    {
+        id: 'fileIo.openSync',
+        methodPattern: 'fileIo.openSync',
+        category: 'resource',
+        resourceType: 'File',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'fileIo.closeSync',
+        description: '同步打开文件（@kit.CoreFileKit fileIo as fs）',
+    },
+    {
+        id: 'openSync.fallback',
+        methodPattern: 'openSync',
+        category: 'resource',
+        resourceType: 'File',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'fs.closeSync',
+        description: '同步打开文件（宽松匹配：className 可能为 fs/fileIo/fileio 等别名）',
+    },
     
     // ========================================================================
     // 网络
@@ -574,6 +614,36 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
         description: '获取关系型数据库存储（旧 API）',
     },
     {
+        id: 'dataRdb.getRdbStore',
+        methodPattern: 'dataRdb.getRdbStore',
+        category: 'resource',
+        resourceType: 'RdbStore',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'RdbStore.close',
+        description: '获取关系型数据库存储（import dataRdb from relationalStore）',
+    },
+    {
+        id: 'rdb.getRdbStore',
+        methodPattern: 'rdb.getRdbStore',
+        category: 'resource',
+        resourceType: 'RdbStore',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'RdbStore.close',
+        description: '获取关系型数据库存储（import rdb from relationalStore）',
+    },
+    {
+        id: 'getRdbStore.fallback',
+        methodPattern: 'getRdbStore',
+        category: 'resource',
+        resourceType: 'RdbStore',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'RdbStore.close',
+        description: '获取关系型数据库存储（宽松匹配：className 可能为 dataRdb/relationalStore 等）',
+    },
+    {
         id: 'RdbStore.query',
         methodPattern: 'RdbStore.query',
         category: 'resource',
@@ -592,6 +662,16 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
         taintedParamIndices: [],
         pairedSinkId: 'ResultSet.close',
         description: 'SQL 查询返回结果集',
+    },
+    {
+        id: 'RdbStore.queryDataSync',
+        methodPattern: 'queryDataSync',
+        category: 'resource',
+        resourceType: 'ResultSet',
+        returnTainted: true,
+        taintedParamIndices: [],
+        pairedSinkId: 'ResultSet.close',
+        description: '同步数据库查询返回结果集（relationalStore.queryDataSync）',
     },
     
     // ========================================================================
@@ -868,6 +948,33 @@ const HARMONYOS_SOURCES: SourceDefinition[] = [
         pairedSinkId: 'display.off',
         description: '注册 display 模块事件监听（如 foldStatusChange），需在组件销毁时 off',
     },
+    // ========================================================================
+    // displaySync 帧回调（@kit.ArkGraphics2D）— 需与 display.on 区分，避免误匹配 setInterval
+    // ========================================================================
+    {
+        id: 'displaySync.on',
+        methodPattern: 'displaySync.on',
+        category: 'closure',
+        resourceType: 'DisplaySyncCallback',
+        returnTainted: false,
+        taintedParamIndices: [],
+        pairedSinkId: 'displaySync.off',
+        description: '注册 displaySync 帧回调（如 on("frame")），需在 aboutToDisappear 时 off',
+    },
+
+    // ========================================================================
+    // 公共事件（CommonEvent）订阅
+    // ========================================================================
+    {
+        id: 'CommonEventManager.subscribe',
+        methodPattern: 'subscribe',
+        category: 'resource',
+        resourceType: 'CommonEventSubscription',
+        returnTainted: false,
+        taintedParamIndices: [0],
+        pairedSinkId: 'CommonEventManager.unsubscribe',
+        description: 'CommonEvent 订阅注册（第 0 个参数 subscriber 需被 unsubscribe 释放）',
+    },
 ];
 
 /**
@@ -1014,6 +1121,24 @@ const HARMONYOS_SINKS: SinkDefinition[] = [
         requireTaintedThis: false,
         pairedSourceId: 'fileio.openSync',
         description: '同步关闭文件（旧 API）',
+    },
+    {
+        id: 'fileIo.close',
+        methodPattern: 'fileIo.close',
+        category: 'resource_release',
+        requiredTaintedParamIndices: [0],
+        requireTaintedThis: false,
+        pairedSourceId: 'fileIo.open',
+        description: '关闭文件（@kit.CoreFileKit，fileIo as fs 时 close 调用）',
+    },
+    {
+        id: 'fileIo.closeSync',
+        methodPattern: 'fileIo.closeSync',
+        category: 'resource_release',
+        requiredTaintedParamIndices: [0],
+        requireTaintedThis: false,
+        pairedSourceId: 'fileIo.openSync',
+        description: '同步关闭文件（@kit.CoreFileKit，fileIo as fs 时 closeSync 调用）',
     },
     
     // ========================================================================
@@ -1283,6 +1408,43 @@ const HARMONYOS_SINKS: SinkDefinition[] = [
         requireTaintedThis: false,
         pairedSourceId: 'display.on',
         description: '解注册 display 模块事件监听（如 foldStatusChange）',
+    },
+
+    // displaySync 帧回调释放（DisplaySync.off 与 displaySync.on 配对）
+    {
+        id: 'displaySync.off',
+        methodPattern: 'displaySync.off',
+        category: 'closure_release',
+        requiredTaintedParamIndices: [],
+        requireTaintedThis: false,
+        pairedSourceId: 'displaySync.on',
+        description: '解注册 displaySync 帧回调（如 off("frame", callback)）',
+    },
+
+    // ========================================================================
+    // 公共事件（CommonEvent）取消订阅
+    // ========================================================================
+    {
+        id: 'CommonEventManager.unsubscribe',
+        methodPattern: 'unsubscribe',
+        category: 'resource_release',
+        requiredTaintedParamIndices: [0],
+        requireTaintedThis: false,
+        pairedSourceId: 'CommonEventManager.subscribe',
+        description: 'CommonEvent 取消订阅（第 0 个参数 subscriber 为被释放的污点对象）',
+    },
+
+    // ========================================================================
+    // 多媒体资源释放（宽松匹配，用于 className 未知的情况）
+    // ========================================================================
+    {
+        id: 'release.fallback',
+        methodPattern: 'release',
+        category: 'resource_release',
+        requiredTaintedParamIndices: [],
+        requireTaintedThis: true,
+        pairedSourceId: 'media.createAVPlayer',
+        description: '释放媒体资源（宽松匹配，this 被污染时生效，覆盖 className 未知的 AVPlayer/AVRecorder 等）',
     },
 ];
 

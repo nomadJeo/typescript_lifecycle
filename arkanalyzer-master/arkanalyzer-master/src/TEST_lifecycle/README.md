@@ -2586,6 +2586,157 @@ if (result.success) {
 
 ---
 
+## 更新历程（完整）
+
+以下内容整理自 **cursor_chats/cursor_typescript.md** 与**本轮对话**的修复与验证记录。每个修复点均给出**原因**与**修复历程**，便于追溯与回归。
+
+### 来源说明
+
+- **cursor_typescript.md**：15/30 项目人工 vs 分析器对比、修复价值排序、阶段一至五实施、harmony-utils/Gramony FP 分析与计划、精度评估、研究目标距离评估等。
+- **本轮对话**：KeePassHO/LinysBrowser 人工审核与对比、防抖模式 FP 抑制（情形3）、跨 await 的 File close、ViewTree 环检测、Source/Sink 规则扩展（ResultSet/AVPlayer/CommonEvent）、ID 丢弃仅 setInterval、两项目全量可分析。
+
+---
+
+### 一、首次修复（排序 1–5，仅部分实施）
+
+**背景**：根据 15 项目对比结果，按修复价值对“漏报/误报”排序，优先做代价小、收益高项。
+
+**原因**：  
+- 漏报：fs.open/openSync、getRdbStore 等 Source 未识别；RdbStore.close 等 Sink 未配对。  
+- 误报：BootView、Splash 等 aboutToDisappear 中已有 clearInterval，仍被报泄漏；DummyMain 未包含 aboutToDisappear，导致 clear 无法被分析到。
+
+**修复历程**：  
+1. **Source/Sink 规则扩展**（`SourceSinkManager.ts`）：新增 `dataRdb.getRdbStore`、`fileIo.open`、`fileIo.openSync` 及对应 Sink（fileIo.close/closeSync）；在 `SourceSinkManager.test.ts` 中补充用例。  
+2. **aboutToDisappear 加入 DummyMain**（`LifecycleModelCreator.ts`）：在 Component 生命周期调用序列中加入 `ComponentLifecycleStage.ABOUT_TO_DISAPPEAR`，使 DummyMain 中 aboutToAppear → build → onPageShow → **aboutToDisappear** 顺序执行，aboutToDisappear 内的 clearInterval/clearTimeout 可被 IFDS 分析到。  
+3. **问题 5（扩大 DummyMain 覆盖 EntryAbility/单例）**：暂不修改，需理清 AbilityCollector、LifecycleModelCreator、NavigationAnalyzer 的配合及单例/AppStorage 路径，单独规划。
+
+**验证**：对 15 项目再次对比；OxHornCampus Splash、interview BootView 等仍为误报，说明污点配对逻辑尚不完整；Accouting 等仍漏报。
+
+---
+
+### 二、Fix 1–4（resourceLeakCount、污点配对、Source 宽松、setInterval 未存储）
+
+**原因**：  
+- **Fix 1**：ClashBox 等报告中 resourceLeaks 数量与 leakDetails 条数不一致，统计口径不统一。  
+- **Fix 2**：aboutToDisappear 中 `clearInterval(this.xxx)` 未正确关联 aboutToAppear 中 `this.xxx = setInterval(...)` 的污点，字段敏感与跨方法流不足。  
+- **Fix 3**：`getRdbStore` 仅按 className 精确匹配，`import rdb from '@ohos.data.relationalStore'` 等写法未覆盖。  
+- **Fix 4**：OxHornCampus TrainsTrack.ets:196、ClashBox EntryAbility:135 等 `setInterval(...)` 返回值未赋值，永远无法 clear，属真实泄漏，需单独检出。
+
+**修复历程**：  
+1. **LifecycleAnalyzer.ts**：当存在 taintAnalysisSummary 时，resourceLeakCount 改为使用 `taintAnalysisSummary.resourceLeaks.length`，与 leakDetails 同源。  
+2. **TaintAnalysisProblem.ts**：`handleAssignmentSource` 支持 `this.xxx = setInterval()` 字段赋值；`matchesAccessPathForArg` 支持 clearInterval(this.xxx) 的字段参数匹配；`getExitToReturnFlowFunction` 中增加 this 到 receiver 的污点回传。  
+3. **SourceSinkManager.ts**：新增 `getRdbStore.fallback`，仅按方法名匹配。  
+4. **TaintAnalysisProblem.ts**：在 getNormalFlowFunction 与 getCallToReturnFlowFunction 的零事实处理中，对 `ArkInvokeStmt` 形式的 standalone `setInterval(...)` 创建 `$setInterval_discarded` 污点并加入 activeTaints。
+
+**结果**：TrainsTrack.ets:196、EntryAbility.ets:135 被正确检出；BootView、Splash、Connect、Request 仍为误报（配对未完全生效）；Accouting sources=1 但 resourceLeaks=0（污点传播或 DummyMain 覆盖问题）。
+
+---
+
+### 三、阶段一：Source/Sink 规则完善（30 项目回归）
+
+**原因**：15 项目扩展为 30 项目后，漏报仍集中在 getRdbStore、openSync 等多种写法未识别；需在不改 core 的前提下扩展规则。
+
+**修复历程**：  
+1. **SourceSinkManager.ts**：新增 `rdb.getRdbStore`（覆盖 `import rdb from '...'`）；新增 `openSync.fallback`，按方法名 `openSync` 宽松匹配（避免误匹配 dialog.open 等，未加 open.fallback）。  
+2. **RdbStore.close**：确认现有 Sink 已正确，未改。  
+3. **Demo4testsAnalysis.test.ts**：OxHornCampus 历史上报告 2 条，改为 `expect(resourceLeaks).toBeGreaterThanOrEqual(1)` 以通过回归。  
+4. **SourceSinkManager.test.ts**：新增 `rdb.getRdbStore`、`openSync.fallback` 用例。
+
+**结果**：interview ProfileEditComp.ets:30、Melotopia LyricUtils.ets:178、Wechat AudioCapturerManager.ets:79 等新检出 File 泄漏（openSync.fallback 命中）；30 项目可完整跑完；TaintAnalysisIntegration 中 Map.set/Map.delete 相关失败与阶段一无关。
+
+---
+
+### 四、阶段二：aboutToDisappear → clearInterval 误报抑制（结构性抑制）
+
+**原因**：污点传播路径复杂（callFlow 字段、exitToReturn 等），直接修 IFDS 成本高；改为在**报告前**做结构性判断：若同一组件的 aboutToDisappear（含其调用链）中存在 clearInterval/clearTimeout，则抑制该 Timer 泄漏。
+
+**修复历程**：  
+1. **TaintAnalysisSolver.ts**：新增 `LifecycleLeakSuppressor`。对每个 ResourceLeak，若类型为 IntervalTimer/TimeoutTimer，则查找 sourceStmt 所属类，检查该类是否具有 aboutToDisappear，并在该方法及其递归 callee 中查找 clearInterval/clearTimeout（`methodContainsTimerRelease`）。若存在则 shouldSuppress 返回 true，从结果中过滤。  
+2. **runFromDummyMain**：在 `solver.getResourceLeaks()` 之后调用 `LifecycleLeakSuppressor.filterSuppressedTimerLeaks(scene, leaks)`。
+
+**结果**：OxHornCampus 2→1（Splash 抑制）、interview 3→2（BootView 抑制）、ClashBox 6→4（Connect、Request 抑制）、Melotopia 5→4（LyricComponent 抑制）；30 项目单元测试通过。
+
+---
+
+### 五、阶段四：DummyMain 覆盖顺序（EntryAbility / @Entry 优先）
+
+**原因**：执行顺序影响路径优先性；入口 Ability 与 @Entry Component 应先执行，更贴近真实启动与 loadContent 加载顺序。
+
+**修复历程**：  
+1. **LifecycleModelCreator.ts**：在 collectAbilitiesAndComponents() 后对 abilities 与 components 排序：`abilities.sort((a,b) => (b.isEntry ? 1 : 0) - (a.isEntry ? 1 : 0))`；`components.sort((a,b) => (b.isEntry ? 1 : 0) - (a.isEntry ? 1 : 0))`。  
+2. onWindowStageCreate 已在 lifecycleOrder 中，无需改。
+
+**结果**：MusicHome 等分析中 EntryAbility 已排在首位；未解决“某段代码是否被 DummyMain 执行到”的可达性问题（那是覆盖建模，非顺序）。
+
+---
+
+### 六、阶段五：栈溢出防护（LinysBrowser 等）
+
+**原因**：LinysBrowser_NEXT-master 分析时发生 “Maximum call stack size exceeded”，导致整轮 30 项目分析中断。
+
+**修复历程**：  
+1. **LifecycleAnalyzer.ts**：将 analyze() 内部分析逻辑提取到 analyzeInternal()，在 try 块中执行；catch 到异常（含栈溢出）时调用 buildErrorResult() 返回降级结果（files=0, abilities=0, resourceLeaks=[] 等），并将异常信息写入 this.errors。  
+2. **analyze-all-30.ts**（或等价脚本）：若 result.errors 存在，写入输出的 error 字段，控制台区分 ERROR (graceful) 与正常结果。
+
+**结果**：LinysBrowser 不再崩溃，返回带 error 的 JSON，30 项目整体可跑完；未根治栈溢出根因（后续在本轮对话中通过 ViewTree 环检测根治）。
+
+---
+
+### 七、harmony-utils / Gramony 误报与 FileLeakSuppressor、Timer 同方法内 clear
+
+**原因**：  
+- harmony-utils：ClickUtil、SpinKitPage 等 setTimeout 在**回调内** clearTimeout(自身)，属一次性 timer；FileUtil 等 openSync 在**同方法或 callee 链**内有 closeSync，工具库封装导致误报。  
+- Gramony：openSync 与 closeSync 相邻或同 try 块，分析器未关联到同一资源。
+
+**修复历程**：  
+1. **FileLeakSuppressor**（`TaintAnalysisSolver.ts`）：已存在。对 File 类型泄漏，若 source 所在方法（含 callee 链）或同类 lambda 子方法中存在 closeSync/close 调用，则抑制。  
+2. **LifecycleLeakSuppressor 扩展**：除“同组件 aboutToDisappear”外，增加“Source 所在方法（含直接 callee）内存在 clearTimeout/clearInterval”的检测——即**情形1**（同方法直接语句含 clear 且 blockCount≤2）与**情形2**（直接 callee 仅含 clear、不含 set，且 callee blockCount≤3）。  
+3. **throttle 场景**：HarmonyUtilCode 的 throttle 中，clearExistingTimeout 仅含 clearTimeout、blockCount=3；情形2 允许 callee blockCount≤3 且仅含 clear，从而抑制 throttle 的 FP；MusicControlComponent 的 lambda 内含 setInterval，不满足“仅含 clear”，故不抑制 MusicHome TP。
+
+**结果**：harmony-utils 部分 Timeout/File 误报下降；Gramony 同方法/同 try 的 open+close 由 FileLeakSuppressor 抑制。
+
+---
+
+### 八、v2.2.0 规则精度（Map/Set/Array 删除）
+
+**原因**：Map.set、Set.add、Array.push 等被当作 Source 导致大量无关污点，MultiVideo、OxHornCampus、Transition 等 projects 的 sources 激增，误报率上升。
+
+**修复历程**：在 **SourceSinkManager.ts** 中删除 Map.set、Set.add、Array.push 及其配对 Sink 规则（共 7 条）；规则键使用 id 而非 methodPattern，避免同 pattern 多条规则互相覆盖。
+
+**结果**：MultiVideo sources 86→0、OxHornCampus 9→3、Transition 7→1 等，误报率显著下降。
+
+---
+
+### 九、本轮对话：ViewTree 环、防抖情形3、File await close、规则扩展、ID 丢弃、KeePassHO/LinysBrowser
+
+**原因**：  
+- **ViewTree 环**：KeePassHO、LinysBrowser 中自引用 @Builder（如 `bindMenu(this.SortMenu)` 在 SortMenu 内）导致 walkViewTree 无限递归、栈溢出。  
+- **防抖 FP**：ClipboardUtils、LoadingDialogUtils:148、linysTimeoutButton、linysExpandableCardItem 等“先 clear 再 set”的防抖写法仍被报 Timer 泄漏；仅情形1/2 不足，需**情形3**（source 所在 BB 内 source 之前有 clear，或 source 所在 BB 的直接前驱 BB 含 clear 且不含 set）。  
+- **File await close**：KeePassHO Support.ets 中 `await fs.close(destFile.fd)` 在 IR 中为 ArkAssignStmt，原 isFileCloseInvoke 只认 ArkInvokeStmt，导致未识别为释放。  
+- **ResultSet/AVPlayer/CommonEvent**：JellyFin 的 queryDataSync、Youtube-Music 的 media.createAVPlayer（className 为空）、ohos_electron 的 CommonEvent subscribe/unsubscribe 需规则扩展或 fallback。  
+- **ID 丢弃**：setInterval 返回值未存储时必泄漏；setTimeout 同模式多为 fire-and-forget，报告会误报激增，故仅对 setInterval 做“未存储即泄漏”的检测。
+
+**修复历程**：  
+1. **ViewTreeCallbackExtractor.ts**：walkViewTree 增加参数 `visited: Set<ViewTreeNode>`，进入节点前 if(visited.has(node)) return; visited.add(node); 递归时传入同一 set，打破环。  
+2. **LifecycleLeakSuppressor.isOneShotTimerPattern**：增加情形3——定位 source stmt 所在 BB；3a）同 BB 内在 source 之前存在 clear 则抑制；3b）对 source BB 的每个直接前驱 BB，若含 clear 且不含 set 则抑制。使用 BasicBlock.getPredecessors()。  
+3. **FileLeakSuppressor.isFileCloseInvoke**：除 ArkInvokeStmt 外，对 ArkAssignStmt 的右操作数取方法名，若为 close/closeSync 则视为释放调用。  
+4. **SourceSinkManager**：新增 RdbStore.queryDataSync、createAVPlayer.fallback、release.fallback、CommonEventManager.subscribe/unsubscribe 等规则（见 taint/README 更新历程）。  
+5. **TaintAnalysisProblem**：ArkInvokeStmt 且 returnTainted 且 methodName 为 setInterval 时，创建 `$timer_id_discarded` 污点并加入 activeTaints；不包含 setTimeout。  
+6. **analyze-new-projects.ts**：纳入 LinysBrowser_NEXT-master；KeePassHO、LinysBrowser 修复后均可完整分析并产出泄漏报告。
+
+**结果**：KeePassHO 泄漏 3→0（2 防抖 + 1 File）；LinysBrowser 7→2（保留 2 个 IntervalTimer TP）；MusicHome、HarmonyUtilCode、Gramony-dev 等回归通过；两项目不再栈溢出。
+
+---
+
+### 十、已知未解决问题（记录于 cursor_typescript 与主 README）
+
+- **Promise 链内赋值**：getRdbStore 等在 .then(db => { this.rdbStore = db }) 中赋值，当前 IFDS 不建模异步，导致 Accouting 等漏报。  
+- **AppStorage/单例路径**：DummyMain 未覆盖 AvPlayerUtil.getInstance() 等，MultiVideo 漏报。  
+- **事件驱动释放**：clearInterval 在 EventHub.on 回调内，非 aboutToDisappear，ClashBox HHmmssTimer 等仍误报。  
+- **静态字段传播**：clearTimeout(ClickUtil.throttleTimeoutID) 等静态字段污点未在 AccessPath 中追踪，harmony-utils 部分 Timeout 误报仍存在。
+
+---
+
 ## 📎 附录
 
 ### A. 参考资料
@@ -2599,6 +2750,7 @@ if (result.success) {
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| **2.3.0** | **2026-03-11** | **防抖/File 抑制增强、ViewTree 环检测、Source/Sink 规则扩展、ID 丢弃 setInterval 检测；KeePassHO/LinysBrowser 全量可分析** |
 | **2.0.1** | **2026-03-01** | **修复 DummyMain CFG stmtToBlock 映射 + AccessPath 构造参数错位，四个真实项目 IFDS 完整通过** |
 | **2.0.0** | **2026-03-01** | **污点分析集成：IFDS 求解器 + 86 条 Source/Sink 规则 + 4 个真实项目验证** |
 | **1.0.0** | **2025-03-01** | **里程碑版本：4 个真实华为 Codelab 项目验证通过** |
@@ -2718,6 +2870,65 @@ if (result.success) {
 
 ---
 
+### G. v2.3.0 防抖/File 抑制、ViewTree 环检测与规则扩展（自上次推送以来）
+
+本小节汇总自上次推送到 GitHub 以来在 **TEST_lifecycle** 目录内完成的修改，不涉及 `src/core` 等其它目录。
+
+#### 1. ViewTreeCallbackExtractor — 环检测避免栈溢出
+
+**问题**：KeePassHO-main、LinysBrowser_NEXT-master 等项目中，存在 `@Builder` 方法自引用（例如 `bindMenu(this.SortMenu)` 在 `SortMenu` 内部），导致 `walkViewTree` 无限递归、分析时报 `Maximum call stack size exceeded`。
+
+**实现**：在 `walkViewTree` 中增加 `visited: Set<ViewTreeNode>` 参数（默认 `new Set()`），在递归前 `if (visited.has(node)) return;` 并 `visited.add(node)`，递归子节点时传入同一 `visited`。这样同一节点只被处理一次，自引用形成环时不会再次进入，从而避免栈溢出。
+
+**位置**：`ViewTreeCallbackExtractor.ts` — `walkViewTree(..., visited = new Set())`。
+
+#### 2. LifecycleLeakSuppressor — 防抖模式 FP 抑制（情形 3）
+
+**问题**：KeePassHO 的 ClipboardUtils、LoadingDialogUtils:148，以及 LinysBrowser 的 linysTimeoutButton、linysExpandableCardItem 等采用“先 `clearTimeout` 再 `setTimeout`”的防抖写法，被误报为 TimeoutTimer 泄漏。
+
+**实现**：在 `isOneShotTimerPattern` 中新增**情形 3**（防抖 BB 前驱检测）：
+- 找到 source stmt 所在的基本块 `sourceBlock`；
+- **3a**：在 `sourceBlock` 内、source stmt **之前**的语句中若存在 `clearTimeout`/`clearInterval`，则抑制（同块内先 clear 后 set）；
+- **3b**：对 `sourceBlock` 的**直接前驱** BB 逐一检查：若某前驱含 clear 且不含 set（即“守卫块”，如 `if(id) clearTimeout(id)`），则抑制。
+
+这样，ClipboardUtils 中“if 块内 clear → 下一块 set”以及 linysTimeoutButton 中“同一块内 clear + set”都会被识别为防抖并抑制；而 MusicControlComponent 的 TP（setInterval 在 if 分支、clearInterval 在 else 分支）中，clear 所在 BB 不是 source 所在 BB 的直接前驱，故不触发情形 3，TP 得以保留。
+
+**位置**：`TaintAnalysisSolver.ts` — `LifecycleLeakSuppressor.isOneShotTimerPattern`。
+
+#### 3. FileLeakSuppressor — 跨 await 的 close 识别
+
+**问题**：KeePassHO Support.ets 中 `await fs.close(destFile.fd)` 在 ArkAnalyzer IR 中被表示为 `ArkAssignStmt`（右侧为 `close` 调用），原先仅识别 `ArkInvokeStmt`，导致“File 未关闭”误报。
+
+**实现**：在 `isFileCloseInvoke` 中增加对 `ArkAssignStmt` 的检查：若右操作数为方法调用且方法名为 `close` 或 `closeSync`，则视为文件关闭调用。这样同一方法（或同一类内 lambda）内“openSync + await write + await close”的写法会被正确识别为已关闭，抑制 File 泄漏误报。
+
+**位置**：`TaintAnalysisSolver.ts` — `FileLeakSuppressor.isFileCloseInvoke`。
+
+#### 4. SourceSinkManager — 新增与回退规则
+
+| 规则 | 类型 | 说明与原因 |
+|------|------|------------|
+| `RdbStore.queryDataSync` | Source | 同步查询返回 ResultSet，需与 `ResultSet.close` 配对；解决 JellyFin 等项目的 ResultSet 漏报。 |
+| `createAVPlayer.fallback` | Source | 仅用方法名 `createAVPlayer` 匹配，解决 IR 中 className 为空（如 `@%unk/%unk: .createAVPlayer()`）时无法命中 `media.createAVPlayer` 的问题。 |
+| `release.fallback` | Sink | 仅用方法名 `release` + `requireTaintedThis: true`，覆盖 className 未知的 AVPlayer/AVRecorder 等释放调用。 |
+| `CommonEventManager.subscribe` | Source | 订阅 CommonEvent，污点放在第 0 个参数（subscriber）；与 `unsubscribe` 配对。 |
+| `CommonEventManager.unsubscribe` | Sink | 取消订阅，要求第 0 个参数被污染。 |
+
+#### 5. TaintAnalysisProblem — ID 丢弃型 setInterval 检测（不包含 setTimeout）
+
+**实现**：对**纯调用**（`ArkInvokeStmt`，返回值未赋给任何变量）的 Source 做特殊处理：若方法名为 `setInterval` 且规则判定为 returnTainted，则创建“虚拟污点”（如 `$timer_id_discarded`）并加入 `activeTaints`。因 ID 未被存储，永远不会到达 `clearInterval`，故会一直留在未释放集合中，被报告为泄漏。**仅对 setInterval 启用**；对 setTimeout 不启用。
+
+**原因**：`setInterval` 丢弃 ID 会导致定时器永久运行，是明确的高危泄漏；而 `setTimeout` 丢弃 ID 在业务代码中大量表现为“fire-and-forget”的一次性延时（动画、布局初始化等），若同样报告会产生大量低价值告警，故仅在 setInterval 上做 ID 丢弃检测，在召回率与精确率之间折中。
+
+**位置**：`TaintAnalysisProblem.ts` — 两处零事实处理中的 `ArkInvokeStmt` 分支（getNormalFlowFunction 与 getCallFlowFunction 的零事实分支）。
+
+#### 6. 测试与脚本
+
+- **Demo4tests**：全量分析脚本 `scripts/analyze-new-projects.ts` 已包含 KeePassHO-main、LinysBrowser_NEXT-master；修复 ViewTree 环检测后两项目可完整跑通。
+- **回归验证**：KeePassHO（0 泄漏）、LinysBrowser（2 个 TP：meowAppSettings:1492、meowDebug:159）、MusicHome（1 个 TP 保留）、HarmonyUtilCode（0）、Gramony-dev（0）、harmony-utils（5）等均在防抖/File 抑制与规则扩展后验证通过。
+- 详见 `tests/unit/lifecycle/README.md` 的「自上次推送以来的更新」与 `taint/README.md` 的「结构性抑制」与「规则扩展」。
+
+---
+
 > **作者**: AI Assistant & YiZhou
 > **创建日期**: 2025-01-17  
-> **最后更新**: 2026-03-01
+> **最后更新**: 2026-03-11

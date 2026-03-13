@@ -277,6 +277,22 @@ npx vitest run tests/unit/lifecycle/ --reporter=verbose
 
 详细测试说明见 `tests/resources/lifecycle/README.md`
 
+### 官方源码 vs 扩展框架 10 项目对比
+
+若已将**官方 ArkAnalyzer 源码**（arkanalyzer-master-source）放在仓库根目录，可运行完整对比：
+
+```bash
+# 方式一：分步运行后汇总
+cd arkanalyzer-master-source && npm install && npx vitest run tests/unit/benchmark/Demo4testsOriginalBenchmark
+cd arkanalyzer-master/arkanalyzer-master && npx vitest run tests/unit/lifecycle/Demo4testsComparison
+node tools/compare-original-extended.mjs
+
+# 方式二：一键运行（自动执行上述步骤）
+node tools/compare-original-extended.mjs --run-all
+```
+
+对比结果写入 `tools/comparison-results/`，并输出汇总表。扩展框架在 10 个 Demo4tests 项目上可检出资源泄漏，官方源码无泄漏检测功能。
+
 ---
 
 ## 👥 贡献者

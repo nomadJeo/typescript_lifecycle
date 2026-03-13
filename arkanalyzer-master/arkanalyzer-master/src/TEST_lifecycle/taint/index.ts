@@ -56,3 +56,10 @@ export {
     TaintAnalysisRunner,
     TaintAnalysisResult,
 } from './TaintAnalysisSolver';
+
+export {
+    SourceSinkLocationScanner,
+    SourceLocation,
+    SinkLocation,
+    SourceSinkLocation,
+} from './SourceSinkLocationScanner';

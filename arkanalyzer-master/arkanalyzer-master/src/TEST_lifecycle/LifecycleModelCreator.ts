@@ -260,16 +260,17 @@ export class LifecycleModelCreator {
     private collectAbilitiesAndComponents(): void {
         console.log('[LifecycleModelCreator] Collecting Abilities and Components...');
         
-        // 收集 Ability
+        // 收集 Ability（AbilityCollector 已分析 onWindowStageCreate 中的 loadContent，建立 ability.components 关联）
         this.abilities = this.abilityCollector.collectAllAbilities();
-        console.log(`  Found ${this.abilities.length} Abilities`);
+        // 阶段四：Entry Ability 优先 - 确保入口 Ability（onCreate/onWindowStageCreate）在 DummyMain 中先执行
+        this.abilities.sort((a, b) => (b.isEntry ? 1 : 0) - (a.isEntry ? 1 : 0)); // entry 排前面
+        console.log(`  Found ${this.abilities.length} Abilities (entry first)`);
         
         // 收集 Component
         this.components = this.abilityCollector.collectAllComponents();
-        console.log(`  Found ${this.components.length} Components`);
-        
-        // TODO: 建立 Ability 与 Component 的关联关系
-        // 可能需要分析 onWindowStageCreate 中的 loadContent 调用
+        // 阶段四：@Entry Component 优先 - loadContent 通常加载入口页，入口组件先执行更符合实际流程
+        this.components.sort((a, b) => (b.isEntry ? 1 : 0) - (a.isEntry ? 1 : 0)); // @Entry 排前面
+        console.log(`  Found ${this.components.length} Components (@Entry first)`);
     }
 
     // ========================================================================
@@ -538,11 +539,12 @@ export class LifecycleModelCreator {
         // 添加实例化
         this.addInstanceCreation(invokeBlock, componentLocal, component.arkClass);
         
-        // 调用 Component 生命周期方法
+        // 调用 Component 生命周期方法（含 aboutToDisappear，以便 clearInterval 等释放逻辑被覆盖）
         const lifecycleOrder: ComponentLifecycleStage[] = [
             ComponentLifecycleStage.ABOUT_TO_APPEAR,
             ComponentLifecycleStage.BUILD,
             ComponentLifecycleStage.PAGE_SHOW,
+            ComponentLifecycleStage.ABOUT_TO_DISAPPEAR,
         ];
         
         for (const stage of lifecycleOrder) {

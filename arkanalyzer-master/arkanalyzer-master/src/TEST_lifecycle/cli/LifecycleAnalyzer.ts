@@ -30,10 +30,11 @@ import {
     AbilityInfo,
     ComponentInfo,
     BoundsConfig,
+    DEFAULT_LIFECYCLE_CONFIG,
 } from '../LifecycleTypes';
 import { ResourceLeakDetector, ResourceLeakReport } from '../taint/ResourceLeakDetector';
 import { TaintAnalysisRunner } from '../taint/TaintAnalysisSolver';
-import { TaintLeak, ResourceLeak } from '../taint/TaintAnalysisProblem';
+import { SourceSinkLocationScanner } from '../taint/SourceSinkLocationScanner';
 
 // ============================================================================
 // 类型定义
@@ -139,16 +140,33 @@ export interface ResourceLeakSummary {
     sinkCount: number;
 }
 
+/** 可序列化的资源泄漏（用于 JSON 传输） */
+export interface ResourceLeakSerialized {
+    resourceType: string;
+    expectedSink: string;
+    description: string;
+    /** 泄漏类型：resource | closure | memory，用于严重程度标签 */
+    category?: string;
+    sourceLocation: { filePath: string; line: number; col: number };
+}
+
+/** 可序列化的污点泄漏（用于 JSON 传输） */
+export interface TaintLeakSerialized {
+    description: string;
+    sourceLocation: { filePath: string; line: number; col: number };
+    sinkLocation: { filePath: string; line: number; col: number };
+}
+
 /**
  * 完整 IFDS 污点分析摘要
  */
 export interface TaintAnalysisSummary {
     /** 入口方法签名 */
     entryMethod: string;
-    /** 资源泄漏（Source 未到达配对的 Sink） */
-    resourceLeaks: ResourceLeak[];
-    /** 污点泄漏（Source 到达了 Sink） */
-    taintLeaks: TaintLeak[];
+    /** 资源泄漏（可序列化，用于 Web 展示） */
+    resourceLeaks: ResourceLeakSerialized[];
+    /** 污点泄漏（可序列化，用于 Web 展示） */
+    taintLeaks: TaintLeakSerialized[];
     /** 统计信息 */
     statistics: {
         analyzedMethods: number;
@@ -179,6 +197,12 @@ export interface AnalysisResult {
         uiCallbackCount: number;
         navigationCount: number;
         resourceLeakCount: number;
+        /** Source 数目（污点分析时可用） */
+        sourceCount?: number;
+        /** Sink 数目（污点分析时可用） */
+        sinkCount?: number;
+        /** 污点泄漏数目（污点分析时可用） */
+        taintLeakCount?: number;
     };
     /** Ability 分析结果 */
     abilities: AbilityAnalysisResult[];
@@ -197,6 +221,12 @@ export interface AnalysisResult {
     };
     /** 完整 IFDS 污点分析结果 */
     taintAnalysis?: TaintAnalysisSummary;
+    /** Source 位置列表（污点分析时可用，用于 Web 展示） */
+    sourceLocations?: Array<{ resourceType: string; methodPattern: string; methodSig: string; filePath: string; line: number; col: number }>;
+    /** Sink 位置列表（污点分析时可用，用于 Web 展示） */
+    sinkLocations?: Array<{ resourceType: string; methodPattern: string; methodSig: string; filePath: string; line: number; col: number }>;
+    /** 本次分析实际使用的有界约束（污点分析时） */
+    boundsUsed?: BoundsConfig;
     /** 分析耗时（毫秒） */
     duration: {
         sceneBuilding: number;
@@ -283,29 +313,59 @@ export class LifecycleAnalyzer {
 
         this.log(`开始分析项目: ${resolvedPath}`);
 
+        try {
+            return await this.analyzeInternal(resolvedPath, startTime, duration);
+        } catch (e) {
+            // 阶段五：栈溢出防护 - 捕获 Maximum call stack size exceeded 等异常，返回优雅降级结果
+            const errMsg = e instanceof Error ? e.message : String(e);
+            this.errors.push(`分析异常 (栈溢出或其它): ${errMsg}`);
+            duration.total = Date.now() - startTime;
+            return this.buildErrorResult(resolvedPath, duration);
+        }
+    }
+
+    /**
+     * 内部分析逻辑（可被 try-catch 包裹）
+     */
+    private async analyzeInternal(
+        resolvedPath: string,
+        startTime: number,
+        duration: AnalysisResult['duration']
+    ): Promise<AnalysisResult> {
+        let scene: Scene;
+        let abilities: AbilityInfo[] = [];
+        let components: ComponentInfo[] = [];
+        let uiCallbacksByType: Record<string, number> = {};
+        let navigations: NavigationSummary[] = [];
+        let dummyMainSummary: DummyMainSummary | undefined;
+        let resourceLeakResult: AnalysisResult['resourceLeaks'] | undefined;
+        let taintAnalysisSummary: TaintAnalysisSummary | undefined;
+        let sourceLocations: AnalysisResult['sourceLocations'];
+        let sinkLocations: AnalysisResult['sinkLocations'];
+
         // 1. 构建 Scene
         let sceneStart = Date.now();
-        const scene = this.buildScene(resolvedPath);
+        scene = this.buildScene(resolvedPath);
         duration.sceneBuilding = Date.now() - sceneStart;
         this.log(`Scene 构建完成，耗时 ${duration.sceneBuilding}ms`);
 
         // 2. 收集 Ability
         let abilityStart = Date.now();
         const abilityCollector = new AbilityCollector(scene);
-        const abilities = abilityCollector.collectAllAbilities();
+        abilities = abilityCollector.collectAllAbilities();
         duration.abilityCollection = Date.now() - abilityStart;
         this.log(`收集到 ${abilities.length} 个 Ability`);
 
         // 3. 收集 Component
         let componentStart = Date.now();
-        const components = abilityCollector.collectAllComponents();
+        components = abilityCollector.collectAllComponents();
         duration.componentCollection = Date.now() - componentStart;
         this.log(`收集到 ${components.length} 个 Component`);
 
         // 4. 提取 UI 回调
         let uiCallbackStart = Date.now();
         const callbackExtractor = new ViewTreeCallbackExtractor(scene);
-        const uiCallbacksByType: Record<string, number> = {};
+        uiCallbacksByType = {};
         
         if (this.options.extractUICallbacks) {
             for (const component of components) {
@@ -322,7 +382,6 @@ export class LifecycleAnalyzer {
 
         // 5. 分析导航
         let navigationStart = Date.now();
-        let navigations: NavigationSummary[] = [];
         
         if (this.options.analyzeNavigation) {
             const navAnalyzer = new NavigationAnalyzer(scene);
@@ -365,7 +424,6 @@ export class LifecycleAnalyzer {
 
         // 6. 生成 DummyMain
         let dummyMainStart = Date.now();
-        let dummyMainSummary: DummyMainSummary | undefined;
         
         if (this.options.generateDummyMain) {
             try {
@@ -416,7 +474,6 @@ export class LifecycleAnalyzer {
 
         // 7. 资源泄漏检测
         let resourceLeakStart = Date.now();
-        let resourceLeakResult: AnalysisResult['resourceLeaks'] | undefined;
         
         if (this.options.detectResourceLeaks) {
             try {
@@ -453,7 +510,6 @@ export class LifecycleAnalyzer {
 
         // 8. 完整 IFDS 污点分析（以 DummyMain 为入口）
         let taintAnalysisStart = Date.now();
-        let taintAnalysisSummary: TaintAnalysisSummary | undefined;
         
         if (this.options.runTaintAnalysis) {
             try {
@@ -472,10 +528,22 @@ export class LifecycleAnalyzer {
                 const taintResult = runner.runFromDummyMain();
                 
                 if (taintResult.success) {
+                    const resourceLeaksSerialized: ResourceLeakSerialized[] = taintResult.resourceLeaks.map(rl => ({
+                        resourceType: rl.resourceType,
+                        expectedSink: rl.expectedSink,
+                        description: rl.description,
+                        category: rl.source?.category,
+                        sourceLocation: SourceSinkLocationScanner.getLocationForStmt(scene, rl.sourceStmt),
+                    }));
+                    const taintLeaksSerialized: TaintLeakSerialized[] = taintResult.taintLeaks.map(tl => ({
+                        description: tl.description,
+                        sourceLocation: SourceSinkLocationScanner.getLocationForStmt(scene, tl.sourceStmt),
+                        sinkLocation: SourceSinkLocationScanner.getLocationForStmt(scene, tl.sinkStmt),
+                    }));
                     taintAnalysisSummary = {
                         entryMethod: taintResult.entryMethod || 'unknown',
-                        resourceLeaks: taintResult.resourceLeaks,
-                        taintLeaks: taintResult.taintLeaks,
+                        resourceLeaks: resourceLeaksSerialized,
+                        taintLeaks: taintLeaksSerialized,
                         statistics: taintResult.statistics,
                     };
                     
@@ -493,7 +561,37 @@ export class LifecycleAnalyzer {
         }
         duration.taintAnalysis = Date.now() - taintAnalysisStart;
 
+        // 9. Source/Sink 位置扫描（污点分析时）
+        if (this.options.runTaintAnalysis) {
+            const scanner = new SourceSinkLocationScanner(scene);
+            const { sources, sinks } = scanner.scan();
+            sourceLocations = sources.map(s => ({
+                resourceType: s.resourceType,
+                methodPattern: s.methodPattern,
+                methodSig: s.methodSig,
+                filePath: s.filePath,
+                line: s.line,
+                col: s.col,
+            }));
+            sinkLocations = sinks.map(s => ({
+                resourceType: s.resourceType,
+                methodPattern: s.methodPattern,
+                methodSig: s.methodSig,
+                filePath: s.filePath,
+                line: s.line,
+                col: s.col,
+            }));
+        }
+
         duration.total = Date.now() - startTime;
+
+        // 计算实际使用的有界约束（用户选项合并默认值）
+        const defaultBounds = DEFAULT_LIFECYCLE_CONFIG.bounds;
+        const boundsUsed: BoundsConfig | undefined = this.options.runTaintAnalysis ? {
+            maxCallbackIterations: this.options.bounds?.maxCallbackIterations ?? defaultBounds.maxCallbackIterations,
+            maxAbilitiesPerFlow: this.options.bounds?.maxAbilitiesPerFlow ?? defaultBounds.maxAbilitiesPerFlow,
+            maxNavigationHops: this.options.bounds?.maxNavigationHops ?? defaultBounds.maxNavigationHops,
+        } : undefined;
 
         // 构建结果
         const result: AnalysisResult = {
@@ -510,7 +608,14 @@ export class LifecycleAnalyzer {
                 lifecycleMethodCount: this.countLifecycleMethods(abilities, components),
                 uiCallbackCount: Object.values(uiCallbacksByType).reduce((a, b) => a + b, 0),
                 navigationCount: navigations.length,
-                resourceLeakCount: resourceLeakResult?.summary.totalLeaks || 0,
+                resourceLeakCount: taintAnalysisSummary
+                    ? taintAnalysisSummary.resourceLeaks.length
+                    : (resourceLeakResult?.summary.totalLeaks ?? 0),
+                ...(sourceLocations && {
+                    sourceCount: sourceLocations.length,
+                    sinkCount: (sinkLocations ?? []).length,
+                    taintLeakCount: taintAnalysisSummary?.taintLeaks.length ?? 0,
+                }),
             },
             abilities: this.convertAbilities(abilities),
             components: this.convertComponents(components),
@@ -519,6 +624,9 @@ export class LifecycleAnalyzer {
             uiCallbacksByType,
             resourceLeaks: resourceLeakResult,
             taintAnalysis: taintAnalysisSummary,
+            sourceLocations,
+            sinkLocations,
+            boundsUsed,
             duration,
             warnings: this.warnings,
             errors: this.errors,
@@ -526,6 +634,37 @@ export class LifecycleAnalyzer {
 
         this.log(`分析完成，总耗时 ${duration.total}ms`);
         return result;
+    }
+
+    /**
+     * 构建错误降级结果（阶段五：栈溢出防护）
+     * 当分析过程中抛出 Maximum call stack size exceeded 等异常时返回
+     */
+    private buildErrorResult(resolvedPath: string, duration: AnalysisResult['duration']): AnalysisResult {
+        return {
+            project: {
+                path: resolvedPath,
+                name: path.basename(resolvedPath),
+                analyzedAt: new Date().toISOString(),
+            },
+            summary: {
+                totalFiles: 0,
+                totalClasses: 0,
+                abilityCount: 0,
+                componentCount: 0,
+                lifecycleMethodCount: 0,
+                uiCallbackCount: 0,
+                navigationCount: 0,
+                resourceLeakCount: 0,
+            },
+            abilities: [],
+            components: [],
+            navigations: [],
+            uiCallbacksByType: {},
+            duration,
+            warnings: this.warnings,
+            errors: this.errors,
+        };
     }
 
     /**

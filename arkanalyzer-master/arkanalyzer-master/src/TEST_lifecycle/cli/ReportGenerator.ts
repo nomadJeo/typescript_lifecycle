@@ -125,7 +125,56 @@ export class ReportGenerator {
         lines.push(`  生命周期方法: ${result.summary.lifecycleMethodCount}`);
         lines.push(`  UI 回调: ${result.summary.uiCallbackCount}`);
         lines.push(`  导航关系: ${result.summary.navigationCount}`);
+        if (result.summary.sourceCount != null) {
+            lines.push(`  Source 数: ${result.summary.sourceCount}`);
+            lines.push(`  Sink 数: ${result.summary.sinkCount ?? 0}`);
+            lines.push(`  资源泄漏: ${result.summary.resourceLeakCount}`);
+            lines.push(`  污点泄漏: ${result.summary.taintLeakCount ?? 0}`);
+        }
         lines.push('');
+        
+        // 污点分析：Source/Sink 位置
+        if (result.sourceLocations && result.sourceLocations.length > 0) {
+            lines.push('【Source 位置】');
+            for (const s of result.sourceLocations) {
+                lines.push(`  • ${s.resourceType} | ${s.filePath}:${s.line}:${s.col} | ${s.methodSig}`);
+            }
+            lines.push('');
+        }
+        if (result.sinkLocations && result.sinkLocations.length > 0) {
+            lines.push('【Sink 位置】');
+            for (const s of result.sinkLocations) {
+                lines.push(`  • ${s.resourceType} | ${s.filePath}:${s.line}:${s.col} | ${s.methodSig}`);
+            }
+            lines.push('');
+        }
+        if (result.taintAnalysis?.resourceLeaks && result.taintAnalysis.resourceLeaks.length > 0) {
+            lines.push('【资源泄漏详情】');
+            for (const rl of result.taintAnalysis.resourceLeaks) {
+                const loc = rl.sourceLocation;
+                lines.push(`  • [${rl.category || 'resource'}] ${rl.resourceType}: ${rl.description}`);
+                lines.push(`    位置: ${loc.filePath}:${loc.line}:${loc.col} | 预期 Sink: ${rl.expectedSink}`);
+            }
+            lines.push('');
+        }
+        if (result.taintAnalysis?.taintLeaks && result.taintAnalysis.taintLeaks.length > 0) {
+            lines.push('【污点泄漏详情】');
+            for (const tl of result.taintAnalysis.taintLeaks) {
+                const sloc = tl.sourceLocation;
+                const dloc = tl.sinkLocation;
+                lines.push(`  • ${tl.description}`);
+                lines.push(`    Source: ${sloc.filePath}:${sloc.line}:${sloc.col}`);
+                lines.push(`    Sink: ${dloc.filePath}:${dloc.line}:${dloc.col}`);
+            }
+            lines.push('');
+        }
+        if (result.boundsUsed) {
+            lines.push('【有界约束】');
+            lines.push(`  maxCallbackIterations: ${result.boundsUsed.maxCallbackIterations}`);
+            lines.push(`  maxAbilitiesPerFlow: ${result.boundsUsed.maxAbilitiesPerFlow}`);
+            lines.push(`  maxNavigationHops: ${result.boundsUsed.maxNavigationHops}`);
+            lines.push('');
+        }
         
         // Ability 列表
         lines.push('【Ability 列表】');
@@ -192,6 +241,12 @@ export class ReportGenerator {
         lines.push(`  UI 回调提取: ${result.duration.uiCallbackExtraction}ms`);
         lines.push(`  导航分析: ${result.duration.navigationAnalysis}ms`);
         lines.push(`  DummyMain 生成: ${result.duration.dummyMainGeneration}ms`);
+        lines.push(`  资源泄漏检测: ${result.duration.resourceLeakDetection}ms`);
+        lines.push(`  IFDS 污点分析: ${result.duration.taintAnalysis}ms`);
+        if (result.taintAnalysis?.statistics) {
+            lines.push(`  IFDS 方法数: ${result.taintAnalysis.statistics.analyzedMethods}`);
+            lines.push(`  IFDS 事实数: ${result.taintAnalysis.statistics.totalFacts}`);
+        }
         lines.push(`  总耗时: ${result.duration.total}ms`);
         lines.push('');
         
@@ -370,8 +425,97 @@ export class ReportGenerator {
                     <div class="stat-value">${result.summary.uiCallbackCount}</div>
                     <div class="stat-label">UI 回调</div>
                 </div>
+                ${result.summary.sourceCount != null ? `
+                <div class="stat-item">
+                    <div class="stat-value">${result.summary.sourceCount}</div>
+                    <div class="stat-label">Source</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${result.summary.sinkCount ?? 0}</div>
+                    <div class="stat-label">Sink</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${result.summary.resourceLeakCount}</div>
+                    <div class="stat-label">资源泄漏</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">${result.summary.taintLeakCount ?? 0}</div>
+                    <div class="stat-label">污点泄漏</div>
+                </div>
+                ` : ''}
             </div>
         </div>
+        
+        ${result.sourceLocations && result.sourceLocations.length > 0 ? `
+        <!-- Source 位置 -->
+        <div class="card">
+            <h2>🔴 Source 位置</h2>
+            <table>
+                <thead><tr><th>资源类型</th><th>方法签名</th><th>文件路径</th><th>行</th><th>列</th></tr></thead>
+                <tbody>
+                    ${result.sourceLocations.map(s => `<tr><td>${s.resourceType}</td><td><code>${s.methodSig}</code></td><td>${s.filePath}</td><td>${s.line}</td><td>${s.col}</td></tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        ` : ''}
+        ${result.sinkLocations && result.sinkLocations.length > 0 ? `
+        <!-- Sink 位置 -->
+        <div class="card">
+            <h2>🟢 Sink 位置</h2>
+            <table>
+                <thead><tr><th>资源类型</th><th>方法签名</th><th>文件路径</th><th>行</th><th>列</th></tr></thead>
+                <tbody>
+                    ${result.sinkLocations.map(s => `<tr><td>${s.resourceType}</td><td><code>${s.methodSig}</code></td><td>${s.filePath}</td><td>${s.line}</td><td>${s.col}</td></tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        ` : ''}
+        ${result.taintAnalysis?.resourceLeaks && result.taintAnalysis.resourceLeaks.length > 0 ? `
+        <!-- 资源泄漏 -->
+        <div class="card">
+            <h2>⚠️ 资源泄漏详情</h2>
+            <table>
+                <thead><tr><th>类型</th><th>资源类型</th><th>描述</th><th>Source 位置</th><th>预期 Sink</th></tr></thead>
+                <tbody>
+                    ${result.taintAnalysis.resourceLeaks.map(rl => {
+                        const loc = rl.sourceLocation;
+                        const catLabel = { resource: '资源', closure: '闭包', memory: '内存' }[rl.category || 'resource'] || rl.category;
+                        return `<tr><td>${catLabel}</td><td>${rl.resourceType}</td><td>${rl.description}</td><td>${loc.filePath}:${loc.line}:${loc.col}</td><td><code>${rl.expectedSink}</code></td></tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+        ` : ''}
+        ${result.taintAnalysis?.taintLeaks && result.taintAnalysis.taintLeaks.length > 0 ? `
+        <!-- 污点泄漏 -->
+        <div class="card">
+            <h2>🔶 污点泄漏详情</h2>
+            <table>
+                <thead><tr><th>描述</th><th>Source 位置</th><th>Sink 位置</th></tr></thead>
+                <tbody>
+                    ${result.taintAnalysis.taintLeaks.map(tl => {
+                        const sl = tl.sourceLocation;
+                        const dl = tl.sinkLocation;
+                        return `<tr><td>${tl.description}</td><td>${sl.filePath}:${sl.line}:${sl.col}</td><td>${dl.filePath}:${dl.line}:${dl.col}</td></tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+        ` : ''}
+        ${result.boundsUsed ? `
+        <!-- 有界约束 -->
+        <div class="card">
+            <h2>📐 有界约束</h2>
+            <table>
+                <thead><tr><th>约束</th><th>参数</th><th>取值</th></tr></thead>
+                <tbody>
+                    <tr><td>约束1</td><td>maxAbilitiesPerFlow</td><td>${result.boundsUsed.maxAbilitiesPerFlow}</td></tr>
+                    <tr><td>约束2</td><td>maxCallbackIterations</td><td>${result.boundsUsed.maxCallbackIterations}</td></tr>
+                    <tr><td>约束3</td><td>maxNavigationHops</td><td>${result.boundsUsed.maxNavigationHops}</td></tr>
+                </tbody>
+            </table>
+        </div>
+        ` : ''}
         
         <!-- Ability 列表 -->
         <div class="card">
@@ -508,6 +652,12 @@ export class ReportGenerator {
                     <tr><td>UI 回调提取</td><td>${result.duration.uiCallbackExtraction}ms</td></tr>
                     <tr><td>导航分析</td><td>${result.duration.navigationAnalysis}ms</td></tr>
                     <tr><td>DummyMain 生成</td><td>${result.duration.dummyMainGeneration}ms</td></tr>
+                    <tr><td>资源泄漏检测</td><td>${result.duration.resourceLeakDetection}ms</td></tr>
+                    <tr><td>IFDS 污点分析</td><td>${result.duration.taintAnalysis}ms</td></tr>
+                    ${result.taintAnalysis?.statistics ? `
+                    <tr><td>IFDS 方法数</td><td>${result.taintAnalysis.statistics.analyzedMethods}</td></tr>
+                    <tr><td>IFDS 事实数</td><td>${result.taintAnalysis.statistics.totalFacts}</td></tr>
+                    ` : ''}
                     <tr style="font-weight: bold;"><td>总耗时</td><td>${result.duration.total}ms</td></tr>
                 </tbody>
             </table>
@@ -562,7 +712,67 @@ export class ReportGenerator {
         lines.push(`| 生命周期方法 | ${result.summary.lifecycleMethodCount} |`);
         lines.push(`| UI 回调 | ${result.summary.uiCallbackCount} |`);
         lines.push(`| 导航关系 | ${result.summary.navigationCount} |`);
+        if (result.summary.sourceCount != null) {
+            lines.push(`| Source | ${result.summary.sourceCount} |`);
+            lines.push(`| Sink | ${result.summary.sinkCount ?? 0} |`);
+            lines.push(`| 资源泄漏 | ${result.summary.resourceLeakCount} |`);
+            lines.push(`| 污点泄漏 | ${result.summary.taintLeakCount ?? 0} |`);
+        }
         lines.push('');
+        if (result.sourceLocations && result.sourceLocations.length > 0) {
+            lines.push('### 🔴 Source 位置');
+            lines.push('');
+            lines.push('| 资源类型 | 方法签名 | 文件路径 | 行 | 列 |');
+            lines.push('|----------|----------|----------|----|----|');
+            for (const s of result.sourceLocations) {
+                lines.push(`| ${s.resourceType} | \`${s.methodSig}\` | ${s.filePath} | ${s.line} | ${s.col} |`);
+            }
+            lines.push('');
+        }
+        if (result.sinkLocations && result.sinkLocations.length > 0) {
+            lines.push('### 🟢 Sink 位置');
+            lines.push('');
+            lines.push('| 资源类型 | 方法签名 | 文件路径 | 行 | 列 |');
+            lines.push('|----------|----------|----------|----|----|');
+            for (const s of result.sinkLocations) {
+                lines.push(`| ${s.resourceType} | \`${s.methodSig}\` | ${s.filePath} | ${s.line} | ${s.col} |`);
+            }
+            lines.push('');
+        }
+        if (result.taintAnalysis?.resourceLeaks && result.taintAnalysis.resourceLeaks.length > 0) {
+            lines.push('### ⚠️ 资源泄漏详情');
+            lines.push('');
+            lines.push('| 类型 | 资源类型 | 描述 | Source 位置 | 预期 Sink |');
+            lines.push('|------|----------|------|-------------|-----------|');
+            for (const rl of result.taintAnalysis.resourceLeaks) {
+                const loc = rl.sourceLocation;
+                const cat = { resource: '资源', closure: '闭包', memory: '内存' }[rl.category || 'resource'] || rl.category;
+                lines.push(`| ${cat} | ${rl.resourceType} | ${rl.description} | ${loc.filePath}:${loc.line}:${loc.col} | \`${rl.expectedSink}\` |`);
+            }
+            lines.push('');
+        }
+        if (result.taintAnalysis?.taintLeaks && result.taintAnalysis.taintLeaks.length > 0) {
+            lines.push('### 🔶 污点泄漏详情');
+            lines.push('');
+            lines.push('| 描述 | Source 位置 | Sink 位置 |');
+            lines.push('|------|-------------|-----------|');
+            for (const tl of result.taintAnalysis.taintLeaks) {
+                const sl = tl.sourceLocation;
+                const dl = tl.sinkLocation;
+                lines.push(`| ${tl.description} | ${sl.filePath}:${sl.line}:${sl.col} | ${dl.filePath}:${dl.line}:${dl.col} |`);
+            }
+            lines.push('');
+        }
+        if (result.boundsUsed) {
+            lines.push('### 📐 有界约束');
+            lines.push('');
+            lines.push('| 约束 | 参数 | 取值 |');
+            lines.push('|------|------|------|');
+            lines.push(`| 约束1 | maxAbilitiesPerFlow | ${result.boundsUsed.maxAbilitiesPerFlow} |`);
+            lines.push(`| 约束2 | maxCallbackIterations | ${result.boundsUsed.maxCallbackIterations} |`);
+            lines.push(`| 约束3 | maxNavigationHops | ${result.boundsUsed.maxNavigationHops} |`);
+            lines.push('');
+        }
         
         // Ability 列表
         lines.push('## 🎯 Ability 列表');
@@ -632,6 +842,12 @@ export class ReportGenerator {
         lines.push(`| UI 回调提取 | ${result.duration.uiCallbackExtraction}ms |`);
         lines.push(`| 导航分析 | ${result.duration.navigationAnalysis}ms |`);
         lines.push(`| DummyMain 生成 | ${result.duration.dummyMainGeneration}ms |`);
+        lines.push(`| 资源泄漏检测 | ${result.duration.resourceLeakDetection}ms |`);
+        lines.push(`| IFDS 污点分析 | ${result.duration.taintAnalysis}ms |`);
+        if (result.taintAnalysis?.statistics) {
+            lines.push(`| IFDS 方法数 | ${result.taintAnalysis.statistics.analyzedMethods} |`);
+            lines.push(`| IFDS 事实数 | ${result.taintAnalysis.statistics.totalFacts} |`);
+        }
         lines.push(`| **总耗时** | **${result.duration.total}ms** |`);
         lines.push('');
         

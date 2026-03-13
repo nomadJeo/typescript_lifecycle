@@ -21,6 +21,7 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { exec } from 'child_process';
 import * as url from 'url';
 import { LifecycleAnalyzer } from '../cli/LifecycleAnalyzer';
 import { ReportGenerator } from '../cli/ReportGenerator';
@@ -113,6 +114,9 @@ async function handleAnalyze(req: http.IncomingMessage, res: http.ServerResponse
             generateDummyMain: options?.generateDummyMain !== false,
             analyzeNavigation: options?.analyzeNavigation !== false,
             extractUICallbacks: options?.extractUICallbacks !== false,
+            detectResourceLeaks: options?.detectResourceLeaks !== false,
+            runTaintAnalysis: options?.runTaintAnalysis !== false,
+            bounds: options?.bounds,
         });
         
         const result = await analyzer.analyze(projectPath);
@@ -120,9 +124,12 @@ async function handleAnalyze(req: http.IncomingMessage, res: http.ServerResponse
         console.log(`[Server] 分析完成，耗时 ${result.duration.total}ms`);
         
         sendJSON(res, { success: true, result });
-    } catch (error) {
+    } catch (error: unknown) {
         console.error('[Server] 分析错误:', error);
-        sendJSON(res, { error: String(error) }, 500);
+        const err = error instanceof Error ? error : new Error(String(error));
+        const payload: { error: string; detail?: string } = { error: err.message };
+        if (err.stack) payload.detail = err.stack;
+        sendJSON(res, payload, 500);
     }
 }
 
@@ -271,6 +278,11 @@ export function startServer(port: number = PORT): http.Server {
         console.log(`║     访问地址: http://localhost:${port}                        ║`);
         console.log('╚════════════════════════════════════════════════════════════╝');
         console.log('');
+        if (process.env.OPEN_BROWSER === '1') {
+            const url = `http://localhost:${port}`;
+            const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
+            exec(cmd, () => {});
+        }
     });
     
     return server;

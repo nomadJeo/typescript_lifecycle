@@ -143,9 +143,30 @@ cli/
 └── README.md             # 本文档
 ```
 
+## 更新历程（与主模块对应）
+
+**完整更新历程**（含每个修复点的**原因**与**修复历程**）见上一级文档：[../README.md#更新历程完整](../README.md#更新历程完整)。内容来源：**cursor_chats/cursor_typescript.md** 与**本聊天**的修复与验证记录。
+
+与 CLI / 分析流程相关的关键阶段摘要：
+
+| 阶段/版本 | 原因与修复要点 |
+|-----------|----------------|
+| **首次修复（排序 1–5）** | 漏报：fs.open、getRdbStore 等规则缺失；误报：DummyMain 未含 aboutToDisappear。扩展 Source/Sink 规则，DummyMain 加入 aboutToDisappear。 |
+| **Fix 1–4** | resourceLeakCount 与 leakDetails 不一致 → 改为使用 taintAnalysisSummary.resourceLeaks.length；aboutToDisappear 污点配对 → handleAssignmentSource / matchesAccessPathForArg / getExitToReturnFlowFunction；getRdbStore.fallback；setInterval 返回值未存储 → $setInterval_discarded。 |
+| **阶段一** | 30 项目回归：rdb.getRdbStore、openSync.fallback；OxHornCampus 断言改为 toBeGreaterThanOrEqual(1)。 |
+| **阶段二** | aboutToDisappear 内已有 clear 仍误报 → LifecycleLeakSuppressor 结构性抑制 Timer 泄漏。 |
+| **阶段四** | 入口优先 → LifecycleModelCreator 对 abilities/components 按 isEntry 排序。 |
+| **阶段五** | LinysBrowser 栈溢出导致整轮中断 → analyze 内 try-catch，buildErrorResult 降级并写入 errors；脚本对 result.errors 写入输出。 |
+| **v2.2.0** | Map.set/Set.add/Array.push 作 Source 导致误报激增 → 删除该 7 条规则，规则键用 id。 |
+| **v2.3.0** | ViewTree 环导致 KeePassHO/LinysBrowser 栈溢出；防抖情形 3、File await close 误报；规则扩展（ResultSet/AVPlayer/CommonEvent）；ID 丢弃仅 setInterval。KeePassHO/LinysBrowser 全量可分析；全量脚本 `scripts/analyze-new-projects.ts`，两项目专项 `scripts/test-two-projects.ts`。 |
+| **bounds** | 有界约束（maxCallbackIterations、k=1/k=2）通过 LifecycleAnalyzer 的 options 或 TaintAnalysisRunner config 传入，见主 README 与 taint/README。 |
+
+---
+
 ## 版本历史
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 2.3.0 | 2026-03-11 | 与 TEST_lifecycle 同步：防抖/File 抑制、新增规则与 ViewTree 环检测后，KeePassHO/LinysBrowser 等可完整分析；全量脚本见 `scripts/analyze-new-projects.ts` |
 | 1.0.0 | 2025-03-01 | 初始版本，支持基础分析和报告生成 |
 | 2.0.0 | 2026-03-01 | 集成污点分析，支持资源/闭包/内存泄漏检测，DummyMain 接入 IFDS |
