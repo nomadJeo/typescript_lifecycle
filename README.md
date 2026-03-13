@@ -27,6 +27,7 @@ typescript/
 │       │       ├── taint/              # 🆕 污点分析模块
 │       │       │   ├── TaintFact.ts
 │       │       │   ├── SourceSinkManager.ts
+│       │       │   ├── SourceSinkLocationScanner.ts
 │       │       │   ├── TaintAnalysisProblem.ts
 │       │       │   ├── TaintAnalysisSolver.ts
 │       │       │   └── ResourceLeakDetector.ts
@@ -34,6 +35,7 @@ typescript/
 │       │       │   ├── LifecycleAnalyzer.ts
 │       │       │   └── ReportGenerator.ts
 │       │       └── gui/                # Web 可视化
+│       ├── scripts/                    # 分析脚本（15/30/全量/两项目专项）
 │       └── tests/unit/lifecycle/       # 测试用例
 ├── Demo4tests/                         # 真实 HarmonyOS 项目（验证用）
 ├── FlowDroid-develop/                  # FlowDroid 参考实现
@@ -121,7 +123,8 @@ const result = await analyzer.analyze('/path/to/harmonyos/project');
 | `ViewTreeCallbackExtractor.ts` | 从 ViewTree 提取 UI 回调 |
 | `LifecycleModelCreator.ts` | 核心构建器，生成 DummyMain |
 | `taint/TaintFact.ts` | 污点数据结构（AccessPath + SourceContext） |
-| `taint/SourceSinkManager.ts` | 86 条 HarmonyOS Source/Sink 规则 |
+| `taint/SourceSinkManager.ts` | HarmonyOS Source/Sink 规则（含 fallback、ResultSet/AVPlayer/CommonEvent 等） |
+| `taint/SourceSinkLocationScanner.ts` | Source/Sink 位置扫描（与污点分析配合） |
 | `taint/TaintAnalysisProblem.ts` | IFDS 问题定义（继承 DataflowProblem） |
 | `taint/TaintAnalysisSolver.ts` | IFDS 求解器 + 分析运行器 |
 | `taint/ResourceLeakDetector.ts` | 简化版方法内泄漏检测 |
@@ -181,6 +184,31 @@ flowchart LR
 - 使用示例
 - TODO 与扩展点
 - 常见问题
+- **更新历程（完整）**：各修复点的**原因**与**修复历程**（cursor_typescript.md + 本仓库对话记录）
+
+子模块文档：
+- 污点分析技术细节与规则扩展：[taint/README.md](arkanalyzer-master/arkanalyzer-master/src/TEST_lifecycle/taint/README.md)
+- CLI 与版本对应：[cli/README.md](arkanalyzer-master/arkanalyzer-master/src/TEST_lifecycle/cli/README.md)
+- 测试说明与更新历程：[tests/unit/lifecycle/README.md](arkanalyzer-master/arkanalyzer-master/tests/unit/lifecycle/README.md)
+
+---
+
+## 📜 更新历程（摘要）
+
+以下为与 **cursor_chats/cursor_typescript.md** 及本仓库对话记录一致的修复摘要；每条均可在子文档中找到**原因**与**修复历程**的详细描述。
+
+| 阶段/版本 | 原因 | 修复要点 |
+|-----------|------|----------|
+| **首次修复（排序 1–5）** | 漏报：fs.open、getRdbStore 等未识别；误报：DummyMain 未含 aboutToDisappear。 | 扩展 Source/Sink 规则；DummyMain 加入 aboutToDisappear。 |
+| **Fix 1–4** | resourceLeakCount 与 leakDetails 不一致；aboutToDisappear 内 clearInterval(this.xxx) 未配对；getRdbStore 别名未命中；setInterval 返回值未存储。 | 统计改为 taintAnalysisSummary.resourceLeaks.length；handleAssignmentSource/matchesAccessPathForArg/getExitToReturnFlowFunction 支持字段；getRdbStore.fallback；standalone setInterval → $setInterval_discarded。 |
+| **阶段一** | 30 项目回归：getRdbStore、openSync 多种写法仍漏报。 | rdb.getRdbStore、openSync.fallback；OxHornCampus 断言 toBeGreaterThanOrEqual(1)。 |
+| **阶段二** | aboutToDisappear 内已有 clear 仍误报，污点路径复杂。 | LifecycleLeakSuppressor：同组件 aboutToDisappear 含 clearInterval/clearTimeout 则过滤。 |
+| **阶段四** | 入口执行顺序影响路径。 | abilities/components 按 isEntry 排序，EntryAbility / @Entry 优先。 |
+| **阶段五** | LinysBrowser 分析栈溢出导致整轮中断。 | analyze 内 try-catch，buildErrorResult 降级并写入 errors；脚本处理 result.errors。 |
+| **v2.2.0** | Map.set/Set.add/Array.push 作 Source 导致误报激增。 | 删除上述 7 条规则；规则键改为 id。 |
+| **v2.3.0** | ViewTree 自引用 @Builder 导致 walkViewTree 无限递归；防抖“先 clear 再 set”误报；await fs.close 在 IR 为 ArkAssignStmt 未识别；ResultSet/AVPlayer/CommonEvent 缺规则；setTimeout 丢弃 ID 误报多。 | walkViewTree 增加 visited Set 破环；LifecycleLeakSuppressor 情形 3（BB 内/前驱 clear）；FileLeakSuppressor 识别 ArkAssignStmt 的 close；新增 queryDataSync/createAVPlayer.fallback/release.fallback/CommonEvent subscribe-unsubscribe；仅 setInterval 做“未存储即泄漏”。KeePassHO/LinysBrowser 可完整分析。 |
+
+**完整更新历程**（含每条原因与修复历程）见 [TEST_lifecycle/README.md#更新历程完整](arkanalyzer-master/arkanalyzer-master/src/TEST_lifecycle/README.md#更新历程完整)。
 
 ---
 
@@ -219,13 +247,29 @@ flowchart LR
 - [x] **新增 display 事件规则**：display.on / display.off（折叠屏事件泄漏支持）
 - [x] **导航分析扩展到 Component**：Component 类中的 pushPath/pushPathByName 现已可被检测到
 
+**v2.3.0 - ViewTree 环、防抖/File 抑制、规则扩展、KeePassHO/LinysBrowser**
+- [x] **ViewTree 环检测**：walkViewTree 增加 visited Set，避免自引用 @Builder 导致栈溢出；KeePassHO、LinysBrowser 可完整分析
+- [x] **防抖情形 3**：LifecycleLeakSuppressor 增加“source 所在 BB 内 source 前有 clear、或前驱 BB 含 clear 且不含 set”，抑制 ClipboardUtils、LoadingDialogUtils、linysTimeoutButton 等 FP
+- [x] **File await close**：FileLeakSuppressor 识别 ArkAssignStmt 形式的 close/closeSync（如 await fs.close(fd)）
+- [x] **Source/Sink 规则扩展**：RdbStore.queryDataSync、createAVPlayer.fallback、release.fallback、CommonEventManager.subscribe/unsubscribe
+- [x] **ID 丢弃仅 setInterval**：仅对 setInterval 未存储返回值报泄漏，setTimeout 不报（减少 fire-and-forget 误报）
+- [x] **15/30 项目对比与两项目专项**：Demo4tests 15 项目人工 vs 分析器验证报告；analyze-new-projects.ts、test-two-projects.ts；KeePassHO 3→0、LinysBrowser 7→2（保留 2 个 TP）
+- [x] **更新历程文档**：根目录、TEST_lifecycle、taint、cli、tests/unit/lifecycle 各 README 补全更新历程（原因 + 修复历程）
+
 ### 待完成 / 已知局限
+
+> **说明**：前三条已修复并划掉。下列为仍存在的局限；其中「跨方法 AVPlayer」「静态命名空间 className 丢失」在 v2.3.0 已有**部分缓解**（见各条说明），其余未修复。
+
 - [x] ~~修复 DummyMain CFG 与 DataflowSolver 兼容性~~ (v2.0.1 已修复)
 - [x] ~~NavPathStack 导航支持~~ (v2.1.0 已完成)
 - [x] ~~有界化约束实现~~ (v2.1.0 已完成)
 - [ ] **链式调用导航漏检**：`getUIContext().getRouter().pushUrl()` 需类型追溯，OxHornCampus 等项目漏检
-- [ ] **跨方法资源泄漏漏检**：AVPlayer 跨 3 层方法追踪（MultiVideoApplication）
-- [ ] **静态命名空间 className 丢失**：ArkAnalyzer IR 对 `distributedDataObject.create()` 等静态调用 className 解析为空字符串
+- [ ] **跨方法资源泄漏漏检**：AVPlayer 跨 3 层方法追踪（MultiVideoApplication），IFDS 路径未闭合；v2.3.0 的 createAVPlayer.fallback 只解决 **className 为空时的 Source/Sink 识别**（如 Youtube-Music），未解决跨层路径闭合
+- [ ] **静态命名空间 className 丢失**：v2.3.0 已对 **createAVPlayer/release** 用 fallback（仅方法名）**部分缓解**（如 Youtube-Music）；**distributedDataObject.create()** 等仍无 fallback，DistributedMail 等仍可能漏报
+- [ ] **Promise 链内赋值**：getRdbStore 等在 `.then(db => { this.rdbStore = db })` 中赋值，IFDS 不建模异步，Accouting 等漏报
+- [ ] **AppStorage/单例路径**：DummyMain 未覆盖 AvPlayerUtil.getInstance() 等，MultiVideo 漏报
+- [ ] **事件驱动释放**：clearInterval 在 EventHub.on 回调内非 aboutToDisappear，ClashBox HHmmssTimer 等仍误报
+- [ ] **静态字段传播**：clearTimeout(ClickUtil.throttleTimeoutID) 等静态字段污点未在 AccessPath 中追踪
 - [ ] Lambda 完整支持
 
 ---
@@ -257,6 +301,7 @@ flowchart LR
 | **L11 真实项目污点分析** | 4 个项目 Scene/DummyMain/Source/Sink 验证 | ✅ |
 | **L12 有界/无界对比测试** | OxHornCampus 有界约束效果验证 + 泄漏内容断言 | ✅ |
 | **L13 约束专项测试** | 约束1/2/3 专项截断效果验证 | ✅ |
+| **L14 Demo4tests 对比与验证** | 原始 vs 扩展对比（Demo4testsComparison）；15/30 项目人工 vs 分析器验证报告；KeePassHO/LinysBrowser 两项目专项 | ✅ |
 
 ### 真实项目验证
 
@@ -266,6 +311,10 @@ flowchart LR
 | **UIDesignKit** | 初级 | 66 | 169 | 0 | 0 | 54 | 562 | 0 |
 | **CloudFoundationKit** | 中级 | 16 | 49 | 0 | 0 | 22 | 184 | 0 |
 | **OxHornCampus** | 高级 | 392 | 968 | 9 | 1 | 161 | 2644 | **1** |
+| **KeePassHO** | 社区 | - | - | - | - | - | - | 0（修复后） |
+| **LinysBrowser** | 社区 | - | - | - | - | - | - | 2（保留 TP，修复后） |
+
+全量分析脚本：`arkanalyzer-master/arkanalyzer-master/scripts/analyze-new-projects.ts`；两项目专项：`scripts/test-two-projects.ts`。详见 [tests/unit/lifecycle/README.md](arkanalyzer-master/arkanalyzer-master/tests/unit/lifecycle/README.md)。
 
 ### 运行测试
 
@@ -306,6 +355,7 @@ node tools/compare-original-extended.mjs --run-all
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
+| 2026-03-11 | v2.3.0 | **ViewTree 环、防抖/File 抑制、规则扩展**：walkViewTree 环检测（visited Set）；LifecycleLeakSuppressor 情形 3；FileLeakSuppressor 识别 ArkAssignStmt close；ResultSet/AVPlayer/CommonEvent 规则；ID 丢弃仅 setInterval；KeePassHO/LinysBrowser 可完整分析；各 README 更新历程（原因+修复历程） |
 | 2026-03-07 | v2.2.0 | **规则精度改进**：删除 Map.set/Set.add/Array.push 超泛化规则（消除 MultiVideo 85个误报）+ 新增分布式 API / display 事件规则 + 导航分析扩展到 Component 类 |
 | 2026-03-01 | v2.1.0 | **有界约束完整实现**：三条约束全链路接入 + NavPathStack 支持 + SourceSinkManager Bug 修复 + 测试断言强化 |
 | 2026-03-01 | v2.0.1 | **修复 DummyMain CFG 兼容性** + AccessPath 参数错位，四个真实项目 IFDS 完整通过（OxHornCampus 检出 1 资源泄漏） |
@@ -325,29 +375,29 @@ node tools/compare-original-extended.mjs --run-all
 
 ## 🔄 版本回滚
 
-如需回滚到本次更新（2026-03-07 生命周期分析模块更新）的版本，可使用以下命令：
+如需回滚到**当前最新提交**（2026-03-11 v2.3.0 更新历程与 KeePassHO/LinysBrowser 修复）的版本，可使用以下命令：
 
 ```bash
-# 1. 查看本次提交的哈希（可选，用于确认）
+# 1. 查看当前最新提交的哈希（可选，用于确认）
 git log -1 --oneline
-# 输出示例: 1fd8a95 feat: 生命周期分析模块更新 - 污点分析、测试文档与有界约束
+# 输出示例: aa3dac8 docs & feat: v2.3.0 更新历程文档、ViewTree环检测、防抖/File抑制...
 
-# 2. 回滚到本次提交（保留工作区修改）
-git checkout 1fd8a95
+# 2. 回滚到该提交（保留工作区修改）
+git checkout aa3dac8
 
-# 3. 若需创建新分支并回滚到该版本
-git checkout -b rollback-20260307 1fd8a95
+# 3. 若需创建新分支并基于该版本开发
+git checkout -b rollback-20260311 aa3dac8
 
 # 4. 若需强制将 main 分支重置到该版本（慎用，会丢弃之后的提交）
-git reset --hard 1fd8a95
+git reset --hard aa3dac8
 git push --force typescript_lifecycle main
 ```
 
 | 场景 | 推荐命令 |
 |------|----------|
-| 仅本地查看该版本代码 | `git checkout 1fd8a95` |
-| 基于该版本开新分支开发 | `git checkout -b 新分支名 1fd8a95` |
-| 完全丢弃之后提交并推送到远程 | `git reset --hard 1fd8a95` + `git push --force` |
+| 仅本地查看该版本代码 | `git checkout aa3dac8` |
+| 基于该版本开新分支开发 | `git checkout -b 新分支名 aa3dac8` |
+| 完全丢弃之后提交并推送到远程 | `git reset --hard aa3dac8` + `git push --force` |
 
 > ⚠️ `git push --force` 会覆盖远程历史，多人协作时请先与团队确认。
 

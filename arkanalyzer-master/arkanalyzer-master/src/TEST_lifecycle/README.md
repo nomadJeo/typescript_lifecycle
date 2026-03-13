@@ -2588,14 +2588,6 @@ if (result.success) {
 
 ## 更新历程（完整）
 
-以下内容整理自 **cursor_chats/cursor_typescript.md** 与**本轮对话**的修复与验证记录。每个修复点均给出**原因**与**修复历程**，便于追溯与回归。
-
-### 来源说明
-
-- **cursor_typescript.md**：15/30 项目人工 vs 分析器对比、修复价值排序、阶段一至五实施、harmony-utils/Gramony FP 分析与计划、精度评估、研究目标距离评估等。
-- **本轮对话**：KeePassHO/LinysBrowser 人工审核与对比、防抖模式 FP 抑制（情形3）、跨 await 的 File close、ViewTree 环检测、Source/Sink 规则扩展（ResultSet/AVPlayer/CommonEvent）、ID 丢弃仅 setInterval、两项目全量可分析。
-
----
 
 ### 一、首次修复（排序 1–5，仅部分实施）
 

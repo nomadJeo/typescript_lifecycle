@@ -328,7 +328,6 @@ struct Splash {
 
 ## 7. 更新历程（污点相关，含原因与修复历程）
 
-以下整理自 **cursor_chats/cursor_typescript.md** 与**本轮对话**，仅列与 taint 目录直接相关的修改。完整时间线与背景见 [../README.md#更新历程完整](../README.md)。
 
 ### 7.1 Source/Sink 规则扩展（SourceSinkManager.ts）
 
